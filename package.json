@@ -1,0 +1,27 @@
+{
+  "name": "starfall-idle",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WISE FACTORY — a top-down terminal automation and idle game",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "local": "node src/main.mjs --local",
+    "demo": "node src/main.mjs --demo",
+    "classic": "node src/classic.mjs",
+    "login": "node src/main.mjs --login",
+    "cloud": "node src/main.mjs --cloud",
+    "snapshot": "node src/main.mjs --snapshot",
+    "test": "node --test",
+    "test:pty": "python3 scripts/pty-smoke.py",
+    "test:cloud-pty": "python3 scripts/cloud-pty-smoke.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/slowlytoyou/wise-factory.git"
+  },
+  "homepage": "https://github.com/slowlytoyou/wise-factory#readme"
+}

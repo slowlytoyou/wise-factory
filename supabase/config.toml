@@ -1,0 +1,26 @@
+project_id = "starfall-factory"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:53682"
+additional_redirect_urls = ["http://127.0.0.1:53682/auth/callback/*"]
+enable_signup = true
+
+# The handler verifies every Bearer token with Auth /user. Disable the gateway
+# precheck to support both modern signing keys and older project configurations.
+[functions.factory-sync]
+verify_jwt = false
+
+[functions.factory-leaderboard]
+verify_jwt = false
