@@ -35,6 +35,28 @@ for (const skin of SKINS) for (const [width, height] of [[88, 30], [100, 36], [1
   });
 }
 
+test('prestige explains sales-based rewards and exact next thresholds in every skin at minimum size', () => {
+  const game = createFactory(0);
+  game.progression.cores = 3;
+  for (const [revenue, gain, remaining] of [[4999.75, 0, '0.25'], [5000, 1, '15,000'], [19999.75, 1, '0.25'], [20000, 2, '25,000'], [45000, 3, '35,000']]) {
+    game.progression.runRevenue = revenue;
+    for (const coins of [0, 1_000_000]) {
+      game.coins = coins;
+      for (const skin of SKINS) for (const prestigeConfirm of [false, true]) {
+        const text = renderFactory(game, { skin: skin.id, prestige: true, prestigeConfirm }, 88, 30).plain();
+        for (const fragment of [
+          `이번 회차 판매액 ₵${revenue.toLocaleString('en-US')}`,
+          '기준: 이번 회차 누적 판매액 · 보유 골드 무관',
+          '구매·건설에 써도 보상 유지 · 환생하면 회차 판매액 0',
+          '5,000 → +1개 · 20,000 → +2개 · 45,000 → +3개',
+          `OH 코어  3 → ${3 + gain}  (+${gain})`,
+          `다음 +${gain + 1}개까지 ₵${remaining} 더 판매`,
+        ]) assert.ok(text.includes(skinText(fragment, skin.id)), `${skin.id}: ${fragment}`);
+      }
+    }
+  }
+});
+
 test('work skins use a distinct static map, row numbers and workspace chrome without decorative animations', () => {
   const game = freeze(createFactory(0, { demo: true }));
   const view = factoryViewport(game);

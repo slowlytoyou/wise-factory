@@ -471,17 +471,24 @@ function nicknameModal(c, game, ui) {
 
 function prestigeModal(c, game, ui) {
   const prestige = prestigeInfo(game);
-  const box = modal(c, 'OH CORE / 환생', ui.prestigeConfirm ? '환생을 확정하면 현재 공장이 새 회차로 바뀝니다.' : '공장을 다시 시작하고, 모든 물품의 판매가를 영구 강화하세요.', 24, 88);
-  write(c, box.x, box.y + 5, `이번 회차 판매 ₵${formatNumber(prestige.runRevenue)}  /  필요 ₵${formatNumber(prestige.requiredRevenue)}`, C.gold, box.width, C.panel);
-  gauge(c, box.x, box.y + 6, box.width, prestige.runRevenue / prestige.requiredRevenue, C.purple);
-  write(c, box.x, box.y + 8, `OH 코어  ${formatNumber(prestige.cores)} → ${formatNumber(prestige.cores + prestige.gain)}  (+${formatNumber(prestige.gain)})`, C.purple, box.width, C.panel);
-  write(c, box.x, box.y + 9, `판매 배율  ${multiplier(prestige.multiplier)} → ${multiplier(prestige.nextMultiplier)}`, C.mint, box.width, C.panel);
-  write(c, box.x, box.y + 11, '코어 1개당 모든 판매가 +25%', C.purple, box.width, C.panel);
-  write(c, box.x, box.y + 12, '보유만 하면 자동 적용 · 소모되지 않음', C.text, box.width, C.panel);
-  write(c, box.x, box.y + 13, '상인·전송기 모두 적용 · 예: 코어 4개 = 판매가 2배', C.dim, box.width, C.panel);
-  write(c, box.x, box.y + 15, '초기화  현재 공장 · 자금 · 회차 판매액', C.orange, box.width, C.panel);
-  write(c, box.x, box.y + 16, '        설계도 · 레이더 · 보유/설치한 전송기', C.orange, box.width, C.panel);
-  write(c, box.x, box.y + 18, '유지    OH 코어 · 환생 횟수 · 누적 판매액', C.mint, box.width, C.panel);
+  const nextGain = prestige.gain + 1;
+  const nextRevenue = prestige.requiredRevenue * nextGain ** 2;
+  const amount = value => value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const box = modal(c, 'OH CORE / 환생', ui.prestigeConfirm ? '환생을 확정하면 현재 공장이 새 회차로 바뀝니다.' : '이번 회차 판매액에 따라 받을 코어 수가 늘어납니다.', 26, 88);
+  write(c, box.x, box.y + 5, `이번 회차 판매액 ₵${amount(prestige.runRevenue)}  /  필요 ₵${amount(prestige.requiredRevenue)}`, C.gold, box.width, C.panel);
+  write(c, box.x, box.y + 6, '기준: 이번 회차 누적 판매액 · 보유 골드 무관', C.text, box.width, C.panel);
+  write(c, box.x, box.y + 7, '구매·건설에 써도 보상 유지 · 환생하면 회차 판매액 0', C.dim, box.width, C.panel);
+  write(c, box.x, box.y + 8, '5,000 → +1개 · 20,000 → +2개 · 45,000 → +3개', C.dim, box.width, C.panel);
+  write(c, box.x, box.y + 10, `OH 코어  ${formatNumber(prestige.cores)} → ${formatNumber(prestige.cores + prestige.gain)}  (+${formatNumber(prestige.gain)})`, C.purple, box.width, C.panel);
+  write(c, box.x, box.y + 11, `다음 +${formatNumber(nextGain)}개까지 ₵${amount(Math.max(0, nextRevenue - prestige.runRevenue))} 더 판매`, C.gold, box.width, C.panel);
+  gauge(c, box.x, box.y + 12, box.width, prestige.runRevenue / nextRevenue, C.purple);
+  write(c, box.x, box.y + 13, `판매 배율  ${multiplier(prestige.multiplier)} → ${multiplier(prestige.nextMultiplier)}`, C.mint, box.width, C.panel);
+  write(c, box.x, box.y + 15, '코어 1개당 모든 판매가 +25%', C.purple, box.width, C.panel);
+  write(c, box.x, box.y + 16, '보유만 하면 자동 적용 · 소모되지 않음', C.text, box.width, C.panel);
+  write(c, box.x, box.y + 17, '상인·전송기 모두 적용 · 예: 코어 4개 = 판매가 2배', C.dim, box.width, C.panel);
+  write(c, box.x, box.y + 19, '초기화  현재 공장 · 자금 · 회차 판매액', C.orange, box.width, C.panel);
+  write(c, box.x, box.y + 20, '        설계도 · 레이더 · 보유/설치한 전송기', C.orange, box.width, C.panel);
+  write(c, box.x, box.y + 21, '유지    OH 코어 · 환생 횟수 · 누적 판매액', C.mint, box.width, C.panel);
   write(c, box.x, box.bottom - 2, ui.prestigeConfirm ? '현재 공장으로 되돌릴 수 없습니다. [Y]로 확정하세요.' : prestige.available ? '새 회차는 기본 채굴 라인과 시작 자금으로 출발합니다.' : `환생까지 ₵${formatNumber(Math.max(0, prestige.requiredRevenue - prestige.runRevenue))} 더 판매하세요.`, ui.prestigeConfirm ? C.orange : C.dim, box.width, C.panel);
   write(c, box.x, box.bottom, ui.prestigeConfirm ? '[Y] 환생 확정  [ESC] 취소' : prestige.available ? '[E/ENTER] 환생 확인  [ESC/T] 돌아가기' : '[ESC/T] 돌아가기', C.gold, box.width, C.panel);
 }
