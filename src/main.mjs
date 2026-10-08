@@ -9,6 +9,7 @@ import { fitText } from './terminal.mjs';
 import { normalizeNickname } from './nickname.mjs';
 import { SKINS, getSkin, skinText } from './skins.mjs';
 import { PreferencesStore, defaultPreferencesPath } from './preferences.mjs';
+import { hangulShortcutKeys } from './keyboard.mjs';
 
 const nicknameGraphemes = new Intl.Segmenter('ko', { granularity: 'grapheme' });
 
@@ -41,6 +42,8 @@ const HELP = `
   E / SPACE 설치 · R 회전 · U 강화 · X 철거 · F 레시피 변경
   B 상인 상점 · T 환생 · C 제작법 · L 내 기록(클라우드는 순위) · P 정지 · ? 도움말 · Q 종료
   N 닉네임 설정 · K 스킨 설정 · G 클라우드 모드에서만 재연결
+  한글 두벌식 입력도 지원: ㅈㅁㄴㅇ = WASD · ㄷ = E · ㅂ = Q.
+  닉네임은 입력한 한글 그대로 저장합니다.
 
   Original Skin · Work Skin (기존 용어) · Work Skin (프로그래밍 용어)
   K → W/S 또는 1/2/3 선택 → Enter 적용. 스킨은 이 기기에 저장됩니다.
@@ -431,6 +434,17 @@ async function run(config) {
     if (opening) await loadLeaderboard();
   }
   function keypress(text, key = {}) {
+    if (closed || suspended) return;
+    const keys = ui.nicknameEditor ? null : hangulShortcutKeys(text, key);
+    if (keys === null) { handleKey(text, key); return; }
+    for (const name of keys) {
+      handleKey(name, { name });
+      // A committed syllable can contain multiple shortcuts. Do not replay
+      // its remaining letters into a newly opened text editor or closed game.
+      if (closed || suspended || ui.nicknameEditor) break;
+    }
+  }
+  function handleKey(text, key = {}) {
     if (closed || suspended) return;
     try {
       const name = (key.name ?? text ?? '').toLowerCase();

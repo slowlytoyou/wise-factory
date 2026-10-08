@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { createGame, tick, buyUpgrade, pulse, prestige, canPrestige, toggleAutomation } from './model.mjs';
 import { renderGame, number } from './render.mjs';
 import { SaveStore, defaultSavePath } from './save.mjs';
+import { hangulShortcutKeys } from './keyboard.mjs';
 
 const HELP = `
   ✦ STARFALL · 별빛 공방
@@ -22,6 +23,7 @@ const HELP = `
 
   1–5 설비 구매 · SPACE 수집 · A 자동 구매 · R 승천
   P 일시 정지 · ? 도움말 · Q 저장하고 종료
+  한글 두벌식 입력도 지원: ㅁ = A · ㄱ = R · ㅔ = P · ㅂ = Q.
 
   최소 88열 × 32행, 권장 110열 × 38행, UTF-8 터미널.
   10초마다 자동 저장 · 게임 실행 중에만 생산합니다.
@@ -146,6 +148,15 @@ function run(config) {
   }
   function effect(kind, label) { ui.effects.push({ kind, label, time: ui.time }); }
   function keypress(text, key = {}) {
+    if (closed || suspended) return;
+    const keys = hangulShortcutKeys(text, key);
+    if (keys === null) { handleKey(text, key); return; }
+    for (const name of keys) {
+      handleKey(name, { name });
+      if (closed || suspended) break;
+    }
+  }
+  function handleKey(text, key = {}) {
     try {
       const name = (key.name ?? text ?? '').toLowerCase();
       if ((key.ctrl && name === 'c') || name === 'q') { cleanup(); return; }

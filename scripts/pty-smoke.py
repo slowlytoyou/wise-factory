@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import unicodedata
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -375,6 +376,97 @@ def check_nickname(directory):
     print("PASS: nickname editor isolates shortcuts, edits Korean, rejects invalid names, saves locally, reloads and cancels")
 
 
+def check_hangul_controls(directory):
+    hangul_directory = directory / "hangul-controls"
+    hangul_directory.mkdir()
+    save = hangul_directory / "factory.json"
+    preferences = hangul_directory / "state" / "starfall" / "preferences.json"
+    with Game(hangul_directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        # Each two-set Korean key must act like the English key at that position.
+        for key, position in [("ㅈ", "(17,15)"), ("ㅁ", "(16,15)"), ("ㄴ", "(16,16)"), ("ㅇ", "(17,16)")]:
+            marker = game.send(key.encode())
+            game.expect(position, marker)
+        marker = game.send("2ㄷ".encode())
+        game.expect("컨베이어 설치", marker)
+        marker = game.send("ㅕ".encode())
+        game.expect("컨베이어 Lv.2", marker)
+        marker = game.send("ㄱ".encode())
+        game.expect("@ 17,16  배출 ↓", marker)
+        marker = game.send("ㅌ".encode())
+        game.expect("설비 회수 +3코인", marker)
+
+        # The IME can commit multiple physical keys as one Hangul syllable:
+        # "우" was typed with D then N, so move right and open the nickname editor.
+        marker = game.send("우".encode())
+        game.expect("NICKNAME / 닉네임 설정", marker)
+        nickname = "한글ㅈㅁㄴㅇㅂㅏ"
+        marker = game.send(b"\x15" + (nickname + "각").encode() + b"\x7f")
+        game.expect("> " + nickname, marker)
+        marker = game.send(b"\r")
+        # Saving keeps the existing NFKC nickname normalization policy.
+        nickname = unicodedata.normalize("NFKC", nickname)
+        game.expect("닉네임 저장 완료 · " + nickname, marker)
+        state = json.loads(save.read_text())
+        assert state["nickname"] == nickname, "Korean nickname text was converted into shortcuts"
+        assert state["player"] == {"x": 18, "y": 16}, "Composed movement or nickname isolation failed"
+        assert len(state["buildings"]) == 7
+        assert state["coins"] - state["lifetimeRevenue"] == 296
+
+        marker = game.send("ㅔ".encode())
+        game.expect("일시 정지", marker)
+        marker = game.send("ㅏ".encode())
+        game.expect("APPEARANCE", marker)
+        # S, S, W selects Work Skin; E applies it while the game is paused.
+        marker = game.send("ㄴㄴㅈㄷ".encode())
+        game.expect("스킨 적용", marker)
+        assert json.loads(preferences.read_text())["skin"] == "work"
+        marker = game.send("ㅊ".encode())
+        game.expect("PRODUCTION ATLAS", marker)
+        game.send("ㅊ".encode())
+        game.pump()
+        marker = game.send("ㅣ".encode())
+        game.expect("LOCAL RECORD", marker)
+        game.send("ㅣ".encode())
+        game.pump()
+        game.finish("ㅂ".encode())
+    state = json.loads(save.read_text())
+    assert state["nickname"] == nickname
+    assert state["player"] == {"x": 18, "y": 16}, "Panel navigation moved the world cursor"
+    assert len(state["buildings"]) == 7
+    print("PASS: Hangul movement/build/upgrade/rotate/salvage, composed input, literal nickname, paused skins/panels and quit")
+
+
+def check_hangul_prestige(directory):
+    save = directory / "hangul-prestige.json"
+    progression_fixture(save, "game.buildings=[]; game.coins=3000; game.player={x:18,y:16}; game.lifetimeRevenue=20000; game.progression.runRevenue=20000;")
+    with Game(directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        marker = game.send("ㅠ".encode())
+        game.expect("용광로 설계도", marker)
+        marker = game.send("ㄷ".encode())
+        game.expect("구매 완료", marker)
+        game.send("ㅠ".encode())
+        game.pump()
+        marker = game.send("ㅅㄷ".encode())
+        game.expect("[Y]", marker)
+        marker = game.send("ㅜㅛ".encode())
+        game.pump()
+        assert "NICKNAME" not in game.text(marker), "Prestige cancellation opened the nickname editor"
+        assert "환생 완료" not in game.text(marker), "Cancelled confirmation accepted a stray Y"
+        game.send("ㅅ".encode())
+        game.pump()
+        marker = game.send("ㅅㄷㅛ".encode())
+        game.expect("환생 완료", marker)
+        game.finish("ㅂ".encode())
+    state = json.loads(save.read_text())
+    assert state["progression"]["prestigeCount"] == 1
+    assert state["progression"]["cores"] == 2
+    assert state["progression"]["unlocks"] == {"smelter": False, "assembler": False}
+    assert state["nickname"] == "공장장"
+    print("PASS: Hangul merchant purchase and prestige preview, cancellation and deliberate confirmation")
+
+
 def check_ctrl_c(directory):
     save = directory / "interrupt.json"
     with Game(directory, "--save", str(save)) as game:
@@ -628,6 +720,8 @@ if __name__ == "__main__":
         check_catalog_navigation(directory)
         check_prestige(directory)
         check_nickname(directory)
+        check_hangul_controls(directory)
+        check_hangul_prestige(directory)
         check_demo(directory)
         check_ctrl_c(directory)
         check_dumb_terminal(directory)
