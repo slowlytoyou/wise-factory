@@ -1,4 +1,4 @@
--- Run after the monthly and total-play-time migrations. All fixtures and checks are rolled back,
+-- Run after the monthly, total-play-time, and live-rate migrations. All fixtures and checks are rolled back,
 -- including the temporary auth users. Any failed assertion aborts the query.
 begin;
 create temporary table monthly_checks (name text not null, passed boolean not null);
@@ -33,7 +33,7 @@ begin
   perform pg_temp.monthly_assert('year boundary reset instant', v_result ->> 'resetsAt' = '2023-12-31T15:00:00Z');
   perform pg_temp.monthly_assert('timezone is explicit', v_result ->> 'timezone' = 'Asia/Seoul');
   perform pg_temp.monthly_assert('missing monthly score is zero', (v_result #>> '{me,score}')::numeric = 0);
-  perform pg_temp.monthly_assert('missing monthly rate is zero', (v_result #>> '{me,goldPerSecond}')::numeric = 0);
+  perform pg_temp.monthly_assert('missing recent sales rate is zero', (v_result #>> '{me,goldPerSecond}')::numeric = 0);
   perform pg_temp.monthly_assert('new leaderboard player has zero total play time', (v_result #>> '{me,playSeconds}')::numeric = 0);
   perform pg_temp.monthly_assert('lifetime score is excluded', (select score = 10 and state ->> 'lifetimeRevenue' = '10' from public.factory_states where user_id = v_user));
   perform pg_temp.monthly_assert('unknown factory has null me', public.factory_leaderboard_at(v_missing, '2024-01-01T00:00:00Z') -> 'me' = 'null'::jsonb);
@@ -47,7 +47,7 @@ begin
   v_result := public.factory_leaderboard_at(v_user, '2023-12-31T15:00:00Z');
   perform pg_temp.monthly_assert('January starts exactly at Korean midnight', v_result ->> 'month' = '2024-01');
   perform pg_temp.monthly_assert('only selected month contributes', (v_result #>> '{me,score}')::numeric = 100);
-  perform pg_temp.monthly_assert('fractional revenue retains exact average', (v_result #>> '{me,goldPerSecond}')::numeric = 5);
+  perform pg_temp.monthly_assert('monthly revenue never becomes a recent sales rate', (v_result #>> '{me,goldPerSecond}')::numeric = 0);
   perform pg_temp.monthly_assert('floor score ties share rank', v_result #>> '{me,rank}' = public.factory_leaderboard_at(v_other, '2023-12-31T15:00:00Z') #>> '{me,rank}');
   perform pg_temp.monthly_assert('next reset follows January length', v_result ->> 'resetsAt' = '2024-01-31T15:00:00Z');
 
@@ -118,7 +118,7 @@ begin
   v_result := public.factory_commit_monthly(v_user, 1, gen_random_uuid(), 'boundary-tick', v_new_state, 112, '월간 공장', '[]', 0, 0, '[{"month":"2030-03-01","revenue":1.25,"seconds":0}]');
   perform pg_temp.monthly_assert('boundary tick accepts revenue with zero elapsed seconds', (v_result ->> 'revision')::integer = 2);
   v_result := public.factory_leaderboard_at(v_user, '2030-02-28T15:00:00Z');
-  perform pg_temp.monthly_assert('zero denominator never returns infinity', (v_result #>> '{me,score}')::numeric = 1 and (v_result #>> '{me,goldPerSecond}')::numeric = 0);
+  perform pg_temp.monthly_assert('monthly-only revenue has no recent sales rate', (v_result #>> '{me,score}')::numeric = 1 and (v_result #>> '{me,goldPerSecond}')::numeric = 0);
   perform pg_temp.monthly_assert('zero-duration revenue does not add total play time', (v_result #>> '{me,playSeconds}')::numeric = 4.5);
   perform pg_temp.monthly_assert('leaderboard entries expose total play time', exists (select 1 from jsonb_array_elements(v_result -> 'entries') as entry where entry ->> 'nickname' = '월간 공장' and (entry ->> 'playSeconds')::numeric = 4.5));
   v_result := public.factory_leaderboard_at(v_user, '2030-03-31T15:00:00Z');

@@ -87,7 +87,8 @@ test('Work Skin retains game terminology while Work Dev translates recipe, shop,
   assert.match(renderFactory(game, { skin: 'work-dev', prestige: true }).plain(), /리팩터링/);
   const leaderboard = renderFactory(game, { skin: 'work-dev', leaderboard: true, cloud: { status: 'online' } }).plain();
   assert.match(leaderboard, /월간 배포 리포트/);
-  assert.match(leaderboard, /초당 평균 크레딧 처리량/);
+  assert.match(leaderboard, /실시간 크레딧\/초 = 최근 60초 배포액 ÷ 60/);
+  assert.match(leaderboard, /3초 자동 갱신/);
   assert.match(leaderboard, /매월 1일 00:00/);
 });
 

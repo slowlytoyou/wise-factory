@@ -1,6 +1,6 @@
 import { advanceFactory, hydrateFactory } from '../_shared/factory.mjs';
 
-// Clients synchronize every 60 seconds. A missed heartbeat never starts a
+// A missed heartbeat never starts a
 // catch-up simulation; active time is also bounded by the server's own clock.
 export const MAX_ACTIVE_SECONDS = 120;
 
@@ -34,30 +34,41 @@ export function hydrateMonthlyFactory(stored, now, requestedSeconds = 0) {
     return buckets.get(month);
   };
   const initialRevenue = game.lifetimeRevenue;
+  // Attribute active duration separately from tick sales. A tick exactly at the
+  // monthly boundary belongs to the new month even though its elapsed second
+  // was spent in the previous month.
   while (cursor < now) {
     const boundary = nextMonthAt(cursor);
     const end = Math.min(now, boundary);
     const seconds = (end - cursor) / 1000;
-    const current = bucket(cursor);
-    current.seconds += seconds;
-    const before = game.lifetimeRevenue;
-    const ticks = game.stepRemainder + seconds;
-    // A tick landing exactly at 00:00 belongs to the new month. Isolate that
-    // final tick without epsilon nudges that would perturb simulation progress.
-    if (end === boundary && ticks + 1e-9 >= 1 && Math.abs(ticks - Math.round(ticks)) < 1e-9) {
-      const finalSeconds = Math.min(1, seconds);
-      advanceFactory(game, seconds - finalSeconds);
-      current.revenue += game.lifetimeRevenue - before;
-      const finalRevenue = game.lifetimeRevenue;
-      advanceFactory(game, finalSeconds);
-      bucket(boundary).revenue += game.lifetimeRevenue - finalRevenue;
-    } else {
-      advanceFactory(game, seconds);
-      current.revenue += game.lifetimeRevenue - before;
-    }
+    bucket(cursor).seconds += seconds;
     cursor = end;
   }
+  const sales = [];
+  const start = now - activeSeconds * 1000;
+  const firstTick = 1 - game.stepRemainder;
+  const ticks = Math.floor(game.stepRemainder + activeSeconds + 1e-9);
+  let elapsed = 0;
+  // At most 120 live seconds are accepted. Advancing each tick gives exact sale
+  // timestamps, including simultaneous merchant/transmitter sales and OH price
+  // bonuses, instead of spreading the interval's revenue uniformly over time.
+  for (let index = 0; index < ticks; index++) {
+    const end = Math.min(activeSeconds, firstTick + index);
+    const before = game.lifetimeRevenue;
+    advanceFactory(game, end - elapsed);
+    const revenue = game.lifetimeRevenue - before;
+    if (revenue > 0) {
+      // Store epoch milliseconds, rounding down so a sub-millisecond sale just
+      // before midnight cannot leak into the next month's ledger. The final
+      // tick is already clamped to activeSeconds using the engine's tolerance.
+      const at = Math.min(now, Math.floor(start + end * 1000));
+      sales.push({ at, revenue });
+      bucket(at).revenue += revenue;
+    }
+    elapsed = end;
+  }
+  advanceFactory(game, activeSeconds - elapsed);
   bucket(now);
   return { game, activeSeconds, earned: game.lifetimeRevenue - initialRevenue,
-    offlineSeconds: 0, offlineEarned: 0, monthly: [...buckets.values()] };
+    offlineSeconds: 0, offlineEarned: 0, monthly: [...buckets.values()], sales };
 }

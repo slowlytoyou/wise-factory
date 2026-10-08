@@ -133,7 +133,7 @@ async function run(config) {
     const ranks = await client.leaderboard();
     say(`WISE FACTORY · 월간 판매 리더보드${/^\d{4}-\d{2}$/.test(ranks.month ?? '') ? ` · ${ranks.month}` : ''}\n`);
     say('매월 1일 00:00 (한국 시간) 점수 초기화 · 공장과 OH 코어는 유지\n');
-    say('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 · 접속하여 실행 중에만 생산\n');
+    say('실시간 골드/초 = 최근 60초 판매액 ÷ 60 · 실행 중 3초마다 반영\n');
     say('총 플레이 시간 (시간:분:초) · 월간 초기화·환생에도 유지\n');
     for (const entry of ranks.entries ?? []) {
       process.stdout.write(`${String(entry.rank).padStart(3)}  ${fitText(entry.nickname, 24)}  `);
@@ -174,6 +174,8 @@ async function run(config) {
   log(config.demo ? 'DEMO · 철·구리 생산 라인이 중앙 상인에게 공급합니다.' : cloud ? '클라우드 공장 · 서버 저장 연결됨 · 상인 옆 B 상점' : '개인 플레이 · 로그인 없이 자동 저장 · 상인 옆 B 상점 · L 내 기록');
   if (loaded.warning) log(loaded.warning);
   let nextBoardRefresh = Infinity;
+  let boardRetryAt = 0;
+  let boardGeneration = 0;
   let previous = null;
   let lastTime = performance.now();
   let lastSave = lastTime;
@@ -201,7 +203,7 @@ async function run(config) {
     }
     lastCloudSync = performance.now();
     dirty = true;
-    if (!closed && cloud.needsSync && ['online', 'rate_limited'].includes(cloud.status)) queueSync();
+    if (!closed && !boardLoading && cloud.needsSync && ['online', 'rate_limited'].includes(cloud.status)) queueSync();
     return result;
   }
   function queueSync() {
@@ -281,6 +283,8 @@ async function run(config) {
     return result;
   }
   function closePanels() {
+    boardGeneration++;
+    nextBoardRefresh = Infinity;
     ui.help = ui.recipes = ui.leaderboard = ui.shop = ui.prestige = ui.prestigeConfirm = false;
     ui.nicknameEditor = false;
     ui.skinPicker = false;
@@ -348,28 +352,74 @@ async function run(config) {
     }
   }
   async function loadLeaderboard() {
-    if (!cloud || boardLoading) return;
+    if (!cloud || closed || suspended || !ui.leaderboard || boardLoading) return;
+    if (performance.now() < boardRetryAt) {
+      nextBoardRefresh = boardRetryAt;
+      return;
+    }
+    const generation = boardGeneration;
+    const current = () => !closed && !suspended && ui.leaderboard && generation === boardGeneration;
     boardLoading = true;
     ui.leaderboardLoading = true;
     nextBoardRefresh = Infinity;
-    let refreshAfter = 60_000;
+    let refreshAfter = 3000;
     if (Date.parse(ui.leaderboardResetsAt) <= Date.now()) {
       ui.leaders = []; ui.myRank = null; ui.leaderboardMonth = '';
     }
-    ui.cloud.message = '순위 불러오는 중';
+    ui.leaderboardStatus = '현재 생산량을 서버에 반영 중…';
+    dirty = true;
     try {
+      // Finish an older in-flight request, then send the live time and actions
+      // waiting behind it. Long Retry-After waits remain scheduled, never held
+      // inside the leaderboard opener. Frame time accrued during the final
+      // request is naturally included by the next three-second refresh.
+      clearTimeout(syncTimer); syncTimer = null;
+      let fresh = false;
+      for (let attempt = 0; attempt < 4 && current(); attempt++) {
+        if (cloud.retryDelayMs > 1000) break;
+        if (cloud.retryDelayMs > 0) await new Promise(resolve => setTimeout(resolve, cloud.retryDelayMs));
+        if (!current()) return;
+        const hadFlight = Boolean(cloud.flight);
+        const result = await syncCloud();
+        if (!current()) return;
+        if (result.ok && !result.deferred && !cloud.needsSync && !hadFlight) { fresh = true; break; }
+        if (!result.ok && !result.deferred && !result.conflict) break;
+      }
+      if (!current()) return;
+      if (!fresh) {
+        ui.leaderboardStale = true;
+        ui.leaderboardStatus = '갱신 지연 · 최신 저장을 확인하지 못했습니다.';
+        refreshAfter = Math.max(refreshAfter, cloud.retryDelayMs);
+        return;
+      }
+      boardRetryAt = performance.now() + 3000;
       const ranks = await cloud.client.leaderboard();
+      if (!current()) return;
       ui.leaders = ranks.entries ?? [];
       ui.myRank = ranks.me ?? null;
       ui.leaderboardMonth = ranks.month;
       ui.leaderboardResetsAt = ranks.resetsAt;
+      ui.leaderboardStale = false;
+      ui.leaderboardStatus = '3초 자동 갱신 · 최신 서버 기록';
       const untilReset = Date.parse(ranks.resetsAt) - Date.now();
       if (Number.isFinite(untilReset) && untilReset > 0) refreshAfter = Math.min(refreshAfter, Math.max(100, untilReset));
-      ui.cloud.message = '서버에서 확인한 월간 판매 순위';
-    } catch (error) { ui.cloud.message = error.message; log(error.message); }
+    } catch (error) {
+      if (error.status === 429) {
+        refreshAfter = Math.max(3000, Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0 ? error.retryAfterMs : 60_000);
+        boardRetryAt = performance.now() + refreshAfter;
+        ui.leaderboardStale = true;
+        ui.leaderboardStatus = `갱신 대기 · 서버 요청 제한 (${Math.ceil(refreshAfter / 1000)}초 후 재시도)`;
+      }
+      if (!current()) return;
+      ui.leaderboardStale = true;
+      if (error.status !== 429) ui.leaderboardStatus = '갱신 지연 · 마지막으로 확인한 기록';
+      log(error.message);
+    }
     finally {
       boardLoading = false; ui.leaderboardLoading = false;
-      nextBoardRefresh = performance.now() + refreshAfter; dirty = true;
+      if (!closed && cloud.needsSync && ['online', 'rate_limited'].includes(cloud.status)) queueSync();
+      if (!closed && ui.leaderboard) nextBoardRefresh = Math.max(boardRetryAt, performance.now() + (generation === boardGeneration ? refreshAfter : 0));
+      dirty = true;
     }
   }
   async function showLeaderboard() {
@@ -531,7 +581,7 @@ async function run(config) {
       }
       if (cloud && ui.leaderboard && now >= nextBoardRefresh) void loadLeaderboard();
       if (now - lastSave >= 10_000) { saveLocal(); lastSave = now; }
-      if (cloud && now - lastCloudSync >= 60_000) { lastCloudSync = now; queueSync(); }
+      if (cloud && !boardLoading && ['online', 'rate_limited'].includes(cloud.status) && now - lastCloudSync >= 3000) { lastCloudSync = now; queueSync(); }
       if (outputBlocked || (ui.paused && previous && !dirty)) return;
       const screen = renderFactory(game, ui, process.stdout.columns || 120, process.stdout.rows || 40);
       const output = (previous ? '' : '\x1b[2J') + screen.render(previous, { color: config.color });

@@ -274,7 +274,9 @@ test('leaderboard shows server entries and own rank, clips nicknames, and strips
   const text = canvas.plain();
   assert.match(text, /MERCHANT GUILD/);
   assert.match(text, /2026-10.*이번 달/);
-  assert.match(text, /초당 평균 골드 생산량/);
+  assert.match(text, /실시간 골드\/초 = 최근 60초 판매액 ÷ 60/);
+  assert.match(text, /3초 자동 갱신/);
+  assert.doesNotMatch(text, /월간 판매액 ÷ 생산 반영 시간/);
   assert.match(text, /매월 1일 00:00 \(한국 시간\) 점수 초기화/);
   assert.match(text, /공장과 OH 코어는 유지/);
   assert.match(text, /12\.34/);
@@ -288,6 +290,10 @@ test('leaderboard shows server entries and own rank, clips nicknames, and strips
   assert.match(waiting, /서버에 연결되면 공식 순위/);
   assert.match(waiting, /\[G\] 서버 연결 다시 시도/);
   assert.ok(!waiting.includes('Supabase 설정'));
+  assert.match(waiting, /갱신 지연/);
+  const stale = renderFactory(game, ui({ leaderboard: true, cloud: { status: 'online' }, leaders: [{ nickname: '공장주', score: 12, goldPerSecond: 1 }], leaderboardStale: true, leaderboardStatus: '갱신 지연 · 최신 저장을 확인하지 못했습니다.' }), 88, 30).plain();
+  assert.match(stale, /갱신 지연 · 최신 저장을 확인하지 못했습니다/);
+  assert.doesNotMatch(stale, /최신 서버 기록/);
 });
 
 test('monthly leaderboard safely displays zero and missing rates without NaN or stale lifetime labels', () => {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createFactory, advanceFactory, hydrateFactory, serializeFactory } from '../src/factory.mjs';
+import { createFactory, advanceFactory, hydrateFactory, serializeFactory, applyAction } from '../src/factory.mjs';
 import { hydrateMonthlyFactory, monthAt, nextMonthAt, MAX_ACTIVE_SECONDS } from '../supabase/functions/factory-sync/season.mjs';
 import { processSync, SupabaseRepository, validateRequest } from '../supabase/functions/factory-sync/server.mjs';
 
@@ -33,6 +33,7 @@ test('a sale on the midnight simulation tick belongs to the new month', () => {
   ]);
   assert.equal(result.earned, 2);
   assert.equal(result.offlineEarned, 0);
+  assert.deepEqual(result.sales, [{ at: midnight, revenue: 2 }]);
 });
 
 test('month splitting preserves exact goods and money during active play', () => {
@@ -52,6 +53,8 @@ test('month splitting preserves exact goods and money during active play', () =>
     assert.ok(Math.abs(result.game.elapsed - expected.game.elapsed) < 1e-8);
     assert.ok(Math.abs(result.game.stepRemainder - expected.game.stepRemainder) < 1e-8);
     assert.equal(result.monthly.reduce((sum, item) => sum + item.revenue, 0), result.earned);
+    assert.equal(result.sales.reduce((sum, item) => sum + item.revenue, 0), result.earned);
+    assert.ok(result.sales.length <= 120);
     assert.ok(Math.abs(result.monthly.reduce((sum, item) => sum + item.seconds, 0) - result.activeSeconds) < 1e-8);
   }
 });
@@ -63,6 +66,17 @@ test('fractional tick rounding at midnight uses the same tolerance as the engine
   const result = hydrateMonthlyFactory(serializeFactory(game, midnight - 300), midnight, 0.3);
   assert.equal(result.monthly[0].revenue, 0);
   assert.equal(result.monthly[1].revenue, 2);
+  assert.deepEqual(result.sales, [{ at: midnight, revenue: 2 }]);
+});
+
+test('a sub-millisecond sale before midnight stays in the previous month', () => {
+  const game = createFactory(midnight - 1000);
+  game.stepRemainder = 0.00025;
+  game.buildings.find((b) => b.x === 18 && b.y === 14).item = 'iron_ore';
+  const result = hydrateMonthlyFactory(serializeFactory(game, midnight - 1000), midnight, 1);
+  assert.deepEqual(result.sales, [{ at: midnight - 1, revenue: 2 }]);
+  assert.equal(result.monthly[0].revenue, 2);
+  assert.equal(result.monthly[1].revenue, 0);
 });
 
 test('long absences preserve the factory and add no monthly revenue or time', () => {
@@ -79,6 +93,7 @@ test('long absences preserve the factory and add no monthly revenue or time', ()
     assert.equal(result.game.lifetimeRevenue, 12345);
     assert.equal(result.game.elapsed, raw.elapsed);
     assert.deepEqual(result.game.buildings, raw.buildings);
+    assert.deepEqual(result.sales, []);
   }
 });
 
@@ -93,7 +108,7 @@ test('future save timestamps and missing timestamps never earn negative or inven
 });
 
 class LedgerRepository {
-  constructor(state) { this.row = { state, revision: 0, nickname: 'WISE' }; this.receipts = new Map(); this.months = new Map(); }
+  constructor(state) { this.row = { state, revision: 0, nickname: 'WISE' }; this.receipts = new Map(); this.months = new Map(); this.sales = []; }
   async prepare(_user, _initial, id, hash) {
     const receipt = this.receipts.get(id);
     return structuredClone(receipt ? receipt.hash === hash ? { ...this.row, replayed: true } : { error: 'request_id_reused' } : this.row);
@@ -104,6 +119,7 @@ class LedgerRepository {
       const previous = this.months.get(item.month) ?? { revenue: 0, seconds: 0 };
       this.months.set(item.month, { revenue: previous.revenue + item.revenue, seconds: previous.seconds + item.seconds });
     }
+    this.sales.push(...p.sales);
     this.row = { state: p.state, revision: this.row.revision + 1, nickname: p.nickname };
     this.receipts.set(p.requestId, { hash: p.hash });
     return structuredClone(this.row);
@@ -123,25 +139,78 @@ test('server commits monthly production once despite replay, conflict, and prest
   assert.ok(repo.months.get('2026-10-01').revenue > 0);
   assert.ok(repo.months.get('2026-11-01').revenue > 0);
   const months = structuredClone(repo.months);
+  const sales = structuredClone(repo.sales);
   await processSync(firstRequest, user, repo, midnight + 120000);
   assert.deepEqual(repo.months, months);
+  assert.deepEqual(repo.sales, sales);
   await assert.rejects(processSync(request(0), user, repo, midnight + 120000), { status: 409 });
   assert.deepEqual(repo.months, months);
   assert.equal([...months.values()].reduce((sum, item) => sum + item.revenue, 0), first.state.lifetimeRevenue - 5000);
+  assert.equal(sales.reduce((sum, item) => sum + item.revenue, 0), first.state.lifetimeRevenue - 5000);
 });
 
-test('monthly RPC receives only trusted simulation buckets and clients cannot supply metrics', async () => {
+test('live RPC receives only trusted simulation buckets and sale ticks; clients cannot supply metrics', async () => {
   let sent;
   const repository = new SupabaseRepository({ url: 'https://example.supabase.co', secretKey: 'sb_secret_test' }, async (url, options) => {
     sent = { url, body: JSON.parse(options.body) };
     return Response.json({});
   });
-  await repository.commit({ monthly: [{ month: '2026-11-01', revenue: 5, seconds: 10 }] });
-  assert.ok(sent.url.endsWith('/factory_commit_monthly'));
+  await repository.commit({ monthly: [{ month: '2026-11-01', revenue: 5, seconds: 10 }], sales: [{ at: midnight, revenue: 5 }] });
+  assert.ok(sent.url.endsWith('/factory_commit_live'));
   assert.deepEqual(sent.body.p_monthly, [{ month: '2026-11-01', revenue: 5, seconds: 10 }]);
-  for (const field of ['monthly', 'score', 'goldPerSecond', 'playSeconds', 'play_seconds', 'season']) {
+  assert.deepEqual(sent.body.p_sales, [{ at: midnight, revenue: 5 }]);
+  for (const field of ['monthly', 'score', 'goldPerSecond', 'playSeconds', 'play_seconds', 'season', 'sales', 'recentSales', 'recentRevenue', 'rateWindowSeconds']) {
     assert.throws(() => validateRequest({ ...request(), [field]: 123 }), { status: 400 });
   }
+});
+
+test('sale samples combine simultaneous merchant and transmitter sales including OH bonuses', () => {
+  const game = createFactory(midnight);
+  game.progression.cores = 3;
+  game.progression.transmitters = 1;
+  assert.equal(applyAction(game, { type: 'build', building: 'transmitter', x: 17, y: 16, dir: 1 }).ok, true);
+  assert.equal(applyAction(game, { type: 'build', building: 'belt', x: 16, y: 16, dir: 1 }).ok, true);
+  game.buildings.find((b) => b.x === 18 && b.y === 14).item = 'iron_ore';
+  game.buildings.find((b) => b.x === 16 && b.y === 16).item = 'research_paper';
+  const result = hydrateMonthlyFactory(serializeFactory(game, midnight), midnight + 1500, 1.5);
+  assert.deepEqual(result.sales, [{ at: midnight + 1000, revenue: (6000 + 2) * 1.75 }]);
+  assert.equal(result.sales[0].revenue, result.earned);
+});
+
+test('frequent fractional syncs place each sale at its actual tick without spreading earnings', () => {
+  const game = createFactory(midnight);
+  game.buildings = game.buildings.filter((b) => b.x === 18);
+  game.buildings[0].item = 'iron_ore';
+  let state = serializeFactory(game, midnight);
+  const sales = [];
+  let now = midnight;
+  for (const seconds of [0.25, 0.35, 0.4, 59]) {
+    now += seconds * 1000;
+    const result = hydrateMonthlyFactory(state, now, seconds);
+    state = serializeFactory(result.game, now);
+    sales.push(...result.sales);
+  }
+  assert.deepEqual(sales, [{ at: midnight + 1000, revenue: 2 }]);
+  // A sale lasts for exactly the half-open rolling window (now - 60 s, now].
+  assert.equal(sales.filter((s) => s.at > now - 60000 && s.at <= now).length, 1);
+  assert.equal(sales.filter((s) => s.at > now + 1000 - 60000 && s.at <= now + 1000).length, 0);
+});
+
+test('purchases, building refunds, and prestige coins never become sale samples', async () => {
+  const game = createFactory(midnight);
+  game.coins = 9000;
+  game.progression.runRevenue = 5000;
+  game.lifetimeRevenue = 5000;
+  const repo = new LedgerRepository(serializeFactory(game, midnight));
+  const result = await processSync(request(0, [
+    { type: 'purchase', item: 'smelter_blueprint' },
+    { type: 'remove', x: 18, y: 14 },
+    { type: 'prestige' },
+  ]), user, repo, midnight);
+  assert.equal(result.state.coins, 300);
+  assert.equal(result.state.lifetimeRevenue, 5000);
+  assert.deepEqual(repo.sales, []);
+  assert.equal([...repo.months.values()].reduce((sum, item) => sum + item.revenue, 0), 0);
 });
 
 

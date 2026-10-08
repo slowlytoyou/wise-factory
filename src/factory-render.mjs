@@ -522,7 +522,8 @@ function leaderboardModal(c, ui) {
   const month = /^\d{4}-\d{2}$/.test(ui.leaderboardMonth ?? '') ? `${ui.leaderboardMonth} · ` : '';
   const box = modal(c, 'MERCHANT GUILD / 월간 교역 리더보드', `${month}서버가 검증한 이번 달 판매액 순위`, 26, 94);
   write(c, box.x, box.y + 4, '매월 1일 00:00 (한국 시간) 점수 초기화', C.gold, box.width, C.panel);
-  write(c, box.x, box.y + 5, '초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간', C.dim, box.width, C.panel);
+  write(c, box.x, box.y + 5, '실시간 골드/초 = 최근 60초 판매액 ÷ 60', C.dim, box.width, C.panel);
+  write(c, box.x, box.y + 6, ui.leaderboardStatus || (ui.leaderboardLoading ? '현재 생산량을 서버에 반영 중…' : ui.leaderboardStale || ui.cloud?.status !== 'online' ? '갱신 지연 · 최신 서버 기록을 확인하세요.' : '3초 자동 갱신 · 최신 서버 기록'), ui.leaderboardStale ? C.orange : C.dim, box.width, C.panel);
   const timeWidth = Math.max(14, textWidth(c, '총 플레이 시간'), ...entries.slice(0, 10).map(entry => formatPlayTime(entry.playSeconds).length));
   const timeX = box.x + box.width - timeWidth;
   const rateX = timeX - 13;

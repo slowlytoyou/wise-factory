@@ -42,6 +42,7 @@ import { createFactory, advanceFactory, applyAction, serializeFactory } from %s;
 const directory = process.env.STARFALL_TEST_DIRECTORY;
 const mode = process.env.STARFALL_TEST_MODE;
 const server = createFactory(Date.now());
+if (mode.startsWith('leaderboard-')) server.buildings.find(building => building.type === 'belt' && building.x === 18 && building.y === 14).item = 'research_paper';
 const receipts = new Map();
 let revision = 0;
 let nickname = 'PTY fixture';
@@ -70,7 +71,7 @@ CloudClient.prototype.sync = async function (request) {
     throw new CloudError('fixture request rate limit', { status: 429, code: 'rate_limited', retryAfterMs: 800 });
   }
   if (receipts.has(request.requestId)) return { ...receipts.get(request.requestId), replayed: true };
-  if (mode === 'in-flight' && request.actions.length && revision === 0) {
+  if ((mode === 'in-flight' && request.actions.length || mode === 'leaderboard-close') && revision === 0) {
     await new Promise(resolve => setTimeout(resolve, 900));
   }
   if (request.revision !== revision) throw new Error('Fixture received an unexpected revision');
@@ -82,13 +83,18 @@ CloudClient.prototype.sync = async function (request) {
   persist();
   const response = { state: serializeFactory(server), revision, nickname, results };
   receipts.set(request.requestId, response);
-  log({ event: 'commit', requestId: request.requestId, actions: request.actions, nickname: request.nickname });
+  log({ event: 'commit', requestId: request.requestId, actions: request.actions, nickname: request.nickname, elapsed: server.elapsed, revenue: server.lifetimeRevenue, revision });
   return response;
 };
 CloudClient.prototype.leaderboard = async function () {
-  log({ event: 'leaderboard', nickname });
-  const rolled = mode === 'month-rollover' && leaderboardReads++ > 0;
-  const me = { rank: 1, nickname, score: rolled ? 0 : 1200, goldPerSecond: rolled ? 0 : 2.5 };
+  log({ event: 'leaderboard', nickname, revision, elapsed: server.elapsed, revenue: server.lifetimeRevenue });
+  const read = leaderboardReads++;
+  if (mode === 'leaderboard-rate-limit' && read === 0) {
+    await new Promise(resolve => setTimeout(resolve, 350));
+    throw new CloudError('fixture leaderboard rate limit', { status: 429, retryAfterMs: 4200 });
+  }
+  const rolled = mode === 'month-rollover' && read > 0;
+  const me = { rank: 1, nickname, score: mode.startsWith('leaderboard-') ? server.lifetimeRevenue : rolled ? 0 : 1200, goldPerSecond: mode.startsWith('leaderboard-') ? server.lifetimeRevenue / 60 : rolled ? 0 : 2.5 };
   return { entries: [me], me, month: rolled ? '2026-11' : '2026-10', resetsAt: new Date(Date.now() + (mode === 'month-rollover' && !rolled ? 1000 : 31 * 86400000)).toISOString(), timezone: 'Asia/Seoul' };
 };
 """ % (json.dumps((ROOT / "src" / "cloud.mjs").as_uri()),
@@ -240,7 +246,7 @@ def check_monthly_leaderboard(directory):
         game.until(lambda: "WISE FACTORY" in game.text())
         game.send(b"l")
         game.until(lambda: "2026-10" in game.text())
-        game.until(lambda: "초당 평균 골드 생산량" in game.text())
+        game.until(lambda: "실시간 골드/초" in game.text())
         assert "매월 1일 00:00 (한국 시간) 점수 초기화" in game.text()
         game.until(lambda: "2026-11" in game.text(), timeout=5)
         assert len([r for r in game.requests() if r["event"] == "leaderboard"]) == 2
@@ -248,6 +254,79 @@ def check_monthly_leaderboard(directory):
         game.send(b"q")
         game.finish()
     print("PASS: open monthly leaderboard refreshes at resetsAt with zeroed score and average rate")
+
+
+def check_live_leaderboard(directory):
+    with Game(directory, "leaderboard-live") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.pump(1.25)
+        assert len(game.requests()) == 1, "Live prediction unexpectedly synced before the heartbeat"
+        game.send(b"l")
+        game.until(lambda: any(entry["event"] == "leaderboard" for entry in game.requests()))
+        entries = game.requests()
+        first_index = next(i for i, entry in enumerate(entries) if entry["event"] == "leaderboard")
+        first = entries[first_index]
+        assert first["revenue"] >= 6000 and first["elapsed"] >= 1.2, "Opening L fetched uncommitted earnings"
+        assert entries[first_index - 1]["event"] == "commit", "Leaderboard was read before the latest save committed"
+        game.send(b"ll")
+        game.until(lambda: len([entry for entry in game.requests() if entry["event"] == "leaderboard"]) >= 2, timeout=5)
+        boards = [entry for entry in game.requests() if entry["event"] == "leaderboard"]
+        assert 2900 <= boards[1]["at"] - boards[0]["at"] < 4800, "Live leaderboard did not automatically refresh every three seconds"
+        assert boards[1]["revision"] > boards[0]["revision"] and boards[1]["elapsed"] > boards[0]["elapsed"] + 2.5
+        game.until(lambda: "3초 자동 갱신" in game.text())
+        game.send(b"l")
+        game.pump(.1)
+        commits = len([entry for entry in game.requests() if entry["event"] == "commit"])
+        game.until(lambda: len([entry for entry in game.requests() if entry["event"] == "commit"]) > commits, timeout=5)
+        assert len([entry for entry in game.requests() if entry["event"] == "leaderboard"]) == 2, "Closing L left leaderboard polling active"
+        game.send(b"q")
+        game.finish()
+    print("PASS: L commits recent earnings before reading, refreshes automatically and maintains three-second heartbeats after closing")
+
+
+def check_leaderboard_rate_limit(directory):
+    with Game(directory, "leaderboard-rate-limit") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"l")
+        game.until(lambda: any(entry["event"] == "leaderboard" for entry in game.requests()))
+        # Close/reopen before the delayed 429 is delivered: its cooldown must
+        # survive even though the original panel request became obsolete.
+        game.send(b"ll")
+        game.until(lambda: "갱신 대기 · 서버 요청 제한" in game.text())
+        game.send(b"ll")
+        game.pump(3.25)
+        assert len([entry for entry in game.requests() if entry["event"] == "leaderboard"]) == 1, "Reopening L bypassed Retry-After"
+        game.until(lambda: len([entry for entry in game.requests() if entry["event"] == "leaderboard"]) == 2, timeout=3)
+        boards = [entry for entry in game.requests() if entry["event"] == "leaderboard"]
+        assert boards[1]["at"] - boards[0]["at"] >= 4180, "Leaderboard retry ignored the server cooldown"
+        game.send(b"q")
+        game.finish()
+    print("PASS: leaderboard 429 preserves Retry-After through close/reopen and recovers without manual input")
+
+
+def check_leaderboard_close_during_sync(directory):
+    with Game(directory, "leaderboard-close") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"l")
+        game.until(lambda: len([entry for entry in game.requests() if entry["event"] == "request"]) == 2)
+        game.send(b"\x1b")
+        game.until(lambda: any(entry["event"] == "commit" for entry in game.requests()))
+        game.pump(.2)
+        assert not any(entry["event"] == "leaderboard" for entry in game.requests()), "A closed board performed a late leaderboard fetch"
+        game.send(b"q")
+        game.finish()
+    print("PASS: closing L during its save prevents a late leaderboard request")
+
+
+def check_leaderboard_failed_sync(directory):
+    with Game(directory, "network-failure") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"l")
+        game.until(lambda: "갱신 지연 · 최신 저장을 확인하지 못했습니다" in game.text())
+        assert not any(entry["event"] == "leaderboard" for entry in game.requests()), "Failed sync displayed a misleading live leaderboard"
+        game.send(b"q")
+        game.finish(code=1)
+    print("PASS: unavailable current saves display an explicit stale warning and never claim a live rank")
 
 
 def check_network_failure(directory):
@@ -342,6 +421,10 @@ if __name__ == "__main__":
         check_nickname_exit(root / "nickname-exit")
         check_nickname_leaderboard(root / "nickname-leaderboard")
         check_monthly_leaderboard(root / "monthly-leaderboard")
+        check_live_leaderboard(root / "live-leaderboard")
+        check_leaderboard_rate_limit(root / "leaderboard-rate-limit")
+        check_leaderboard_close_during_sync(root / "leaderboard-close")
+        check_leaderboard_failed_sync(root / "leaderboard-failed-sync")
         check_network_failure(root / "network-failure")
         check_rate_limit_recovery(root / "rate-limit")
         check_paused_active_time(root / "paused-time")

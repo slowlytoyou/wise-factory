@@ -87,14 +87,14 @@ export async function processSync(input, userId, repository, now = Date.now()) {
   // Never rewind that server timestamp or later syncs would award the time twice.
   const savedAt = opened.state?.savedAt;
   const simulationTime = Math.max(now, Number.isFinite(savedAt) ? savedAt : now);
-  const { game, monthly } = hydrateMonthlyFactory(opened.state, simulationTime, body.activeSeconds ?? 0);
+  const { game, monthly, sales } = hydrateMonthlyFactory(opened.state, simulationTime, body.activeSeconds ?? 0);
   const results = body.actions.map((action) => applyAction(game, action));
   const state = serializeFactory(game, simulationTime);
   if (!Number.isFinite(state.lifetimeRevenue) || state.lifetimeRevenue < 0) throw new HttpError(500, 'simulation_error', '공장 생산 상태를 계산할 수 없습니다.');
   return databaseError(await repository.commit({
     userId, expectedRevision: opened.revision, requestId: body.requestId, hash,
     state, score: Math.floor(state.lifetimeRevenue), nickname: body.nickname ?? opened.nickname,
-    results, offlineEarned: 0, offlineSeconds: 0, monthly,
+    results, offlineEarned: 0, offlineSeconds: 0, monthly, sales,
   }));
 }
 
@@ -144,10 +144,10 @@ export class SupabaseRepository {
     return this.rpc('factory_prepare', { p_user_id: userId, p_initial_state: state, p_request_id: requestId, p_hash: hash });
   }
   commit(p) {
-    return this.rpc('factory_commit_monthly', {
+    return this.rpc('factory_commit_live', {
       p_user_id: p.userId, p_expected_revision: p.expectedRevision, p_request_id: p.requestId, p_hash: p.hash,
       p_state: p.state, p_score: p.score, p_nickname: p.nickname, p_results: p.results,
-      p_offline_earned: p.offlineEarned, p_offline_seconds: p.offlineSeconds, p_monthly: p.monthly,
+      p_offline_earned: p.offlineEarned, p_offline_seconds: p.offlineSeconds, p_monthly: p.monthly, p_sales: p.sales,
     });
   }
   leaderboard(userId) { return this.rpc('factory_leaderboard', { p_user_id: userId }); }

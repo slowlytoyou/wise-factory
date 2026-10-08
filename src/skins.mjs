@@ -25,6 +25,7 @@ const terms = {
   'LOCAL PLAY': 'LOCAL SESSION', 'CLOUD PLAY': 'CLOUD SESSION', 'MARKET': 'METRICS',
   'RECIPE': 'TARGET', 'DEMO': 'SANDBOX',
   '초당 평균 골드 생산량': '초당 평균 크레딧 처리량',
+  '실시간 골드/초': '실시간 크레딧/초',
   '생산 반영 시간': '빌드 반영 시간',
   '총 플레이 시간': '누적 가동 시간',
   '월간 교역 리더보드': '월간 배포 리포트', '공식 순위': '공유 순위', '리더보드': '성과 보드',

@@ -33,7 +33,7 @@ test('cloud mode rejects a custom local save before credentials, network or save
   assert.deepEqual(readdirSync(directory), ['personal.json']);
 });
 
-test('leaderboard command reports monthly scores, average gold per second, total playtime and Korea reset time', t => {
+test('leaderboard command reports monthly scores, live recent sales rate, total playtime and Korea reset time', t => {
   const directory = mkdtempSync(join(tmpdir(), 'wise-monthly-cli-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const preload = join(directory, 'leaderboard.mjs');
@@ -55,7 +55,9 @@ test('leaderboard command reports monthly scores, average gold per second, total
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /월간 판매 리더보드 · 2026-10/);
   assert.match(result.stdout, /매월 1일 00:00 \(한국 시간\) 점수 초기화/);
-  assert.match(result.stdout, /초당 평균 골드 생산량/);
+  assert.match(result.stdout, /실시간 골드\/초 = 최근 60초 판매액 ÷ 60/);
+  assert.match(result.stdout, /실행 중 3초마다 반영/);
+  assert.doesNotMatch(result.stdout, /월간 판매액 ÷ 생산 반영 시간/);
   assert.match(result.stdout, /연구소.*12,000 C.*2\.75 골드\/초.*25:01:01/);
   assert.match(result.stdout, /새 공장.*0 C.*0 골드\/초.*0:00:00/);
   assert.match(result.stdout, /내 순위: 25위.*0\.5 골드\/초.*총 플레이 시간 1:00:00/);
@@ -69,6 +71,7 @@ test('leaderboard command reports monthly scores, average gold per second, total
   assert.ifError(dev.error);
   assert.equal(dev.status, 0, dev.stderr);
   assert.match(dev.stdout, /누적 가동 시간 \(시간:분:초\)/);
+  assert.match(dev.stdout, /실시간 크레딧\/초 = 최근 60초 배포액 ÷ 60/);
   assert.match(dev.stdout, /새 공장.*0:00:00/, 'nickname stays literal in Dev mode');
   assert.match(dev.stdout, /내 순위: 25위.*누적 가동 시간 1:00:00/);
 });
