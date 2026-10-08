@@ -57,7 +57,7 @@ const HELP = `
   로그인해도 npm start는 개인 로컬 저장을 사용합니다.
   클라우드 모드에서는 접속 중 화면만 정지해도 생산을 계속합니다.
   저장 위치: __FACTORY_SAVE_PATH__
-  Supabase 설정 안내: docs/CLOUD_SETUP.md
+  클라우드 플레이 안내: docs/GAMEPLAY.md
 `;
 
 function options(args) {
@@ -102,7 +102,7 @@ async function cloudClient() {
   // Load cloud credentials and networking only for an explicit cloud command.
   const { readCloudConfig, CloudClient } = await import('./cloud.mjs');
   const config = readCloudConfig();
-  if (!config) throw new Error('선택 기능인 클라우드의 연결 설정이 없습니다. 설정 절차: docs/CLOUD_SETUP.md');
+  if (!config) throw new Error('선택 기능인 클라우드의 연결 설정이 없습니다. 클라우드 안내: docs/GAMEPLAY.md');
   const client = new CloudClient(config);
   await client.loadSession();
   return client;

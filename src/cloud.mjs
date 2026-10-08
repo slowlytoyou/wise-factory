@@ -66,7 +66,7 @@ export function readCloudConfig({ env = process.env, configFile = CONFIG_FILE, d
   const url = file.url;
   const key = file.publishableKey || file.key;
   if (!url && !key) return null;
-  if (!url || !key) throw new Error('SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY를 함께 설정하세요. docs/CLOUD_SETUP.md 참고.');
+  if (!url || !key) throw new Error('SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY를 함께 설정하세요. docs/GAMEPLAY.md 참고.');
   return validateConfig({ url, key, port: env.STARFALL_AUTH_PORT || file.port });
 }
 
@@ -83,7 +83,7 @@ function openBrowser(url) {
 
 export class CloudClient {
   constructor(config, { fetchImpl = globalThis.fetch, sessionFile, callbackPort, callbackTimeoutMs = 180_000 } = {}) {
-    if (!config) throw new Error('클라우드 설정이 없습니다. docs/CLOUD_SETUP.md를 확인하세요.');
+    if (!config) throw new Error('클라우드 설정이 없습니다. docs/GAMEPLAY.md를 확인하세요.');
     this.config = validateConfig(config);
     this.fetch = fetchImpl;
     const project = createHash('sha256').update(this.config.url).digest('hex').slice(0, 24);
