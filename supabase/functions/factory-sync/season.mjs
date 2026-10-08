@@ -1,4 +1,8 @@
-import { advanceFactory, hydrateFactory, MAX_OFFLINE_SECONDS } from '../_shared/factory.mjs';
+import { advanceFactory, hydrateFactory } from '../_shared/factory.mjs';
+
+// Clients synchronize every 60 seconds. A missed heartbeat never starts a
+// catch-up simulation; active time is also bounded by the server's own clock.
+export const MAX_ACTIVE_SECONDS = 120;
 
 const KST_OFFSET = 9 * 60 * 60 * 1000;
 
@@ -13,15 +17,16 @@ export function nextMonthAt(timestamp) {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - KST_OFFSET;
 }
 
-/** Advance exactly the same capped simulation while attributing sales to months.
- * A long absence earns the most recent eight hours, not unbounded missed time.
+/** Advance explicitly reported live play while attributing sales to months.
+ * Loading a save alone never advances production.
  * The ledger is separate from the factory so prestige never erases monthly sales.
  */
-export function hydrateMonthlyFactory(stored, now) {
-  const { game } = hydrateFactory(stored, now, { offline: false });
-  const offlineSeconds = Number.isFinite(stored.savedAt)
-    ? Math.min(MAX_OFFLINE_SECONDS, Math.max(0, (now - stored.savedAt) / 1000)) : 0;
-  let cursor = now - offlineSeconds * 1000;
+export function hydrateMonthlyFactory(stored, now, requestedSeconds = 0) {
+  const { game } = hydrateFactory(stored, now);
+  const wallSeconds = Number.isFinite(stored.savedAt) ? Math.max(0, (now - stored.savedAt) / 1000) : 0;
+  const activeSeconds = Number.isFinite(requestedSeconds) && requestedSeconds >= 0 && wallSeconds <= MAX_ACTIVE_SECONDS
+    ? Math.min(MAX_ACTIVE_SECONDS, wallSeconds, requestedSeconds) : 0;
+  let cursor = now - activeSeconds * 1000;
   const buckets = new Map();
   const bucket = (at) => {
     const month = monthAt(at);
@@ -53,5 +58,6 @@ export function hydrateMonthlyFactory(stored, now) {
     cursor = end;
   }
   bucket(now);
-  return { game, offlineSeconds, offlineEarned: game.lifetimeRevenue - initialRevenue, monthly: [...buckets.values()] };
+  return { game, activeSeconds, earned: game.lifetimeRevenue - initialRevenue,
+    offlineSeconds: 0, offlineEarned: 0, monthly: [...buckets.values()] };
 }

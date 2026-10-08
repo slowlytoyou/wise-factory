@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CONFIG_FILE = fileURLToPath(new URL('../config/cloud.json', import.meta.url));
+const DEFAULT_CONFIG_FILE = fileURLToPath(new URL('../config/cloud.default.json', import.meta.url));
 const DEFAULT_PORT = 53682;
 const cleanMessage = (value) => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 220);
 
@@ -43,15 +44,27 @@ function validateConfig(config) {
   return { url: url.origin, key, port };
 }
 
-export function readCloudConfig({ env = process.env, configFile = CONFIG_FILE } = {}) {
-  let file = {};
-  try { file = JSON.parse(readFileSync(configFile, 'utf8')); }
+function readConfigFile(path, label) {
+  if (!path) return null;
+  let file;
+  try { file = JSON.parse(readFileSync(path, 'utf8')); }
   catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('config/cloud.json을 읽을 수 없습니다. JSON 형식을 확인하세요.');
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`${label}을 읽을 수 없습니다. JSON 형식을 확인하세요.`);
   }
-  if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error('config/cloud.json은 URL과 공개 키를 담은 JSON 객체여야 합니다.');
-  const url = env.SUPABASE_URL || file.url;
-  const key = env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || file.publishableKey || file.key;
+  if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`${label}은 URL과 공개 키를 담은 JSON 객체여야 합니다.`);
+  return file;
+}
+
+export function readCloudConfig({ env = process.env, configFile = CONFIG_FILE, defaultConfigFile = DEFAULT_CONFIG_FILE } = {}) {
+  const environmentKey = env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY;
+  // A project URL and its key are one pair. Never combine an override URL with
+  // the shared server's key (or silently switch a broken override to that server).
+  const file = env.SUPABASE_URL || environmentKey
+    ? { url: env.SUPABASE_URL, key: environmentKey }
+    : readConfigFile(configFile, 'config/cloud.json') ?? readConfigFile(defaultConfigFile, 'config/cloud.default.json') ?? {};
+  const url = file.url;
+  const key = file.publishableKey || file.key;
   if (!url && !key) return null;
   if (!url || !key) throw new Error('SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY를 함께 설정하세요. docs/CLOUD_SETUP.md 참고.');
   return validateConfig({ url, key, port: env.STARFALL_AUTH_PORT || file.port });
@@ -248,9 +261,10 @@ export class CloudClient {
     }
   }
 
-  async sync({ revision = null, actions = [], requestId = randomUUID(), nickname } = {}) {
+  async sync({ revision = null, actions = [], activeSeconds = 0, requestId = randomUUID(), nickname } = {}) {
     if (!Array.isArray(actions) || actions.length > 32) throw new Error('동기화 작업은 한 번에 최대 32개입니다.');
-    return this.authenticated('/functions/v1/factory-sync', { body: { revision, actions, requestId, ...(nickname === undefined ? {} : { nickname }) } });
+    if (!Number.isFinite(activeSeconds) || activeSeconds < 0 || activeSeconds > 120) throw new Error('실행 시간은 0–120초 사이여야 합니다.');
+    return this.authenticated('/functions/v1/factory-sync', { body: { revision, actions, activeSeconds, requestId, ...(nickname === undefined ? {} : { nickname }) } });
   }
 
   async leaderboard() { return this.authenticated('/functions/v1/factory-leaderboard', { method: 'GET' }); }

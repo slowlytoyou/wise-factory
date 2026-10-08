@@ -384,7 +384,7 @@ function helpModal(c, ui) {
     '상인에게 설계도와 레이더를 사서 새 설비·광맥을 여세요.',
     '광맥 → 가공 설비 → 벨트 → 중앙 M 상인 / 전송기',
     '화살표 방향 배출 · 벨트는 뒤·옆 입력 · 가공 설비는 모든 방향 입력',
-    ui.demo ? '데모에서는 진행 상황을 저장하지 않습니다.' : isCloudMode(ui) ? '클라우드에서는 P를 눌러도 서버의 생산 시간은 흐릅니다.' : '개인 플레이 · 자동 저장 · 종료 후 최대 8시간 생산 반영',
+    ui.demo ? '데모에서는 진행 상황을 저장하지 않습니다.' : isCloudMode(ui) ? '클라우드: 실행·연결 중에만 생산 · P는 화면만 정지' : '개인 플레이 · 자동 저장 · 실행 중에만 생산',
   ];
   const box = modal(c, 'FIELD MANUAL / 공장 운영 안내', '작은 채굴 라인을 거대한 무인 공장으로 키워 보세요.', lines.length + 8, 88);
   lines.forEach((line, index) => write(c, box.x, box.y + 5 + index, line, index >= 11 ? C.dim : C.text, box.width, C.panel));
@@ -499,7 +499,7 @@ function localRecordsModal(c, game, ui) {
   ];
   rows.forEach(([text, color], index) => write(c, box.x, box.y + 5 + index * 2, text, color, box.width, C.panel));
   write(c, box.x, box.y + 17, '코어 1개당 판매가 +25% · 자동 적용 · 소모되지 않음', C.dim, box.width, C.panel);
-  const saveStatus = ui.demo ? '데모 · 진행 상황 저장 안 함' : ui.saveError ? `저장 오류 · ${ui.saveError}` : '이 기기에 자동 저장 · 종료 후 최대 8시간 생산 반영';
+  const saveStatus = ui.demo ? '데모 · 진행 상황 저장 안 함' : ui.saveError ? `저장 오류 · ${ui.saveError}` : '이 기기에 자동 저장 · 실행 중에만 생산';
   if (ui.saveError) rawWrite(c, box.x, box.y + 18, saveStatus, C.orange, box.width, C.panel);
   else write(c, box.x, box.y + 18, saveStatus, C.dim, box.width, C.panel);
   write(c, box.x, box.bottom, '[N] 닉네임 설정  [ESC / L] 돌아가기', C.gold, box.width, C.panel);
@@ -536,7 +536,7 @@ function leaderboardModal(c, ui) {
   if (me) mixedWrite(c, box.x, box.bottom - 4, typeof me === 'object'
     ? [`내 공장 #${me.rank}  `, { raw: fitText(me.nickname ?? '', 20) }, ` ₵${formatNumber(safeAmount(me.score))} · ${formatGoldRate(me.goldPerSecond)} 골드/초`]
     : [`내 공장 #${me}`], C.mint, box.width, C.panel);
-  write(c, box.x, box.bottom - 2, '최대 8시간 오프라인 생산 포함 · 공장과 OH 코어는 유지', C.dim, box.width, C.panel);
+  write(c, box.x, box.bottom - 2, '실행 중에만 생산 · 공장과 OH 코어는 유지', C.dim, box.width, C.panel);
   write(c, box.x, box.bottom, '[N] 닉네임 설정  [ESC / L] 돌아가기', C.gold, box.width, C.panel);
 }
 

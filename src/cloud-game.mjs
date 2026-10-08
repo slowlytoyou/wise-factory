@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { applyAction, hydrateFactory } from './factory.mjs';
+import { advanceFactory, applyAction, hydrateFactory } from './factory.mjs';
 import { normalizeNickname } from './nickname.mjs';
 
-/** Owns one authoritative cloud save. Only actions and a chosen nickname leave this process. */
+/** Owns one authoritative cloud save. Sends actions, active time and a chosen nickname. */
 export class CloudGame {
   constructor(client, { nickname, onMessage = () => {}, clock = Date.now, minSyncIntervalMs = 600 } = {}) {
     if (typeof clock !== 'function' || !Number.isFinite(minSyncIntervalMs) || minSyncIntervalMs < 0) throw new TypeError('올바른 동기화 간격이 필요합니다.');
@@ -13,6 +13,7 @@ export class CloudGame {
     this.minSyncIntervalMs = minSyncIntervalMs;
     this.retryAt = 0;
     this.catchUpNeeded = false;
+    this.activeSeconds = 0;
     this.game = null;
     this.revision = null;
     this.queue = [];
@@ -28,10 +29,18 @@ export class CloudGame {
   get pendingNickname() { return this.queuedNickname ?? this.pending?.nickname; }
 
   async connect() {
+    this.activeSeconds = 0;
     this.retryAt = this.clock() + this.minSyncIntervalMs;
-    const result = await this.client.sync({ revision: null, actions: [], requestId: randomUUID(), nickname: this.nickname });
+    const result = await this.client.sync({ revision: null, actions: [], activeSeconds: 0, requestId: randomUUID(), nickname: this.nickname });
     this.accept(result);
     return this.game;
+  }
+
+  trackActiveTime(seconds) {
+    // Only short, live frame intervals count. Suspended computers and lost
+    // connections must not become production when a request finally succeeds.
+    if (this.status !== 'online' || !Number.isFinite(seconds) || seconds <= 0 || seconds > 1) return;
+    this.activeSeconds = Math.min(120, this.activeSeconds + seconds);
   }
 
   accept(result) {
@@ -82,7 +91,8 @@ export class CloudGame {
 
   async performSync(catchUpReplay = true) {
     if (!this.pending) {
-      this.pending = { revision: this.revision, actions: this.queue.splice(0, 32), requestId: randomUUID() };
+      this.pending = { revision: this.revision, actions: this.queue.splice(0, 32), activeSeconds: this.activeSeconds, requestId: randomUUID() };
+      this.activeSeconds = 0;
       if (this.queuedNickname !== undefined) {
         this.pending.nickname = this.queuedNickname;
         this.queuedNickname = undefined;
@@ -94,6 +104,9 @@ export class CloudGame {
       const response = await this.client.sync(request);
       this.accept(response);
       this.pending = null;
+      // The renderer already simulated these in-flight frames. Keep that
+      // prediction after adopting the confirmed state; they are sent next time.
+      if (this.activeSeconds > 0) advanceFactory(this.game, this.activeSeconds);
       if (request.nickname !== undefined && this.nickname === request.nickname) this.onMessage(`닉네임 저장 완료 · ${this.nickname}`);
       this.catchUpNeeded = Boolean(response.replayed);
       const acceptedQueue = [];
@@ -104,8 +117,8 @@ export class CloudGame {
       }
       this.queue = acceptedQueue;
       for (const result of response.results ?? []) if (!result.ok) this.onMessage(`서버 확인 · ${result.message}`);
-      // An idempotent receipt confirms the actions, but deliberately does not
-      // advance server time. Schedule fresh catchup after the minimum spacing;
+      // An idempotent receipt confirms the actions and their active time.
+      // Refresh from the current revision after the minimum spacing;
       // retries and receipt handling must obey the same request rate as builds.
       if (response.replayed && catchUpReplay) {
         if (this.retryDelayMs > 0) return { ok: true, deferred: true, retryAt: this.retryAt };
@@ -113,6 +126,7 @@ export class CloudGame {
       }
       return { ok: true };
     } catch (error) {
+      this.activeSeconds = 0;
       if (error.status === 409 && error.payload?.state) {
         try {
           const nicknameDiscarded = this.pendingNickname !== undefined;

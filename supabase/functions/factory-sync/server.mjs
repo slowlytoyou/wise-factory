@@ -1,5 +1,5 @@
 import { createFactory, applyAction, serializeFactory } from '../_shared/factory.mjs';
-import { hydrateMonthlyFactory } from './season.mjs';
+import { hydrateMonthlyFactory, MAX_ACTIVE_SECONDS } from './season.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
@@ -11,10 +11,12 @@ function fail(message) { throw new HttpError(400, 'invalid_request', message); }
 
 export function validateRequest(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) fail('JSON 요청이 필요합니다.');
-  if (Object.keys(body).some((key) => !['revision', 'actions', 'requestId', 'nickname'].includes(key))) fail('허용되지 않은 요청 필드입니다. 저장 상태나 점수를 보낼 수 없습니다.');
+  if (Object.keys(body).some((key) => !['revision', 'actions', 'requestId', 'nickname', 'activeSeconds'].includes(key))) fail('허용되지 않은 요청 필드입니다. 저장 상태나 점수를 보낼 수 없습니다.');
   if (!UUID.test(body.requestId ?? '')) fail('requestId는 UUID여야 합니다.');
   const revision = body.revision ?? null;
   if (revision !== null && (!Number.isSafeInteger(revision) || revision < 0)) fail('revision이 올바르지 않습니다.');
+  if (body.activeSeconds !== undefined && (!Number.isFinite(body.activeSeconds) || body.activeSeconds < 0 || body.activeSeconds > MAX_ACTIVE_SECONDS)) fail('플레이 시간은 0~120초 범위여야 합니다.');
+  if (revision === null && (body.activeSeconds ?? 0) !== 0) fail('공장을 불러올 때는 생산 시간을 보낼 수 없습니다.');
   const actions = body.actions ?? [];
   if (!Array.isArray(actions) || actions.length > 32) fail('한 번에 최대 32개 작업을 보낼 수 있습니다.');
   if (revision === null && actions.length) fail('먼저 현재 서버 상태를 불러오세요.');
@@ -40,7 +42,8 @@ export function validateRequest(body) {
     nickname = body.nickname.normalize('NFKC').trim().replace(/ +/g, ' ');
     if (!/^[\p{L}\p{N}_ -]{2,20}$/u.test(nickname)) fail('닉네임은 2~20자의 문자, 숫자, 공백, _ 또는 -만 사용할 수 있습니다.');
   }
-  return { revision, actions, requestId: body.requestId, ...(nickname === undefined ? {} : { nickname }) };
+  return { revision, actions, requestId: body.requestId, ...(nickname === undefined ? {} : { nickname }),
+    ...(body.activeSeconds === undefined ? {} : { activeSeconds: body.activeSeconds }) };
 }
 
 function canonical(value) {
@@ -76,7 +79,7 @@ export async function processSync(input, userId, repository, now = Date.now()) {
       || (Object.hasOwn(stored, 'progression') ? stored.progression?.schema !== 1 : stored.version !== 2)) {
     throw new HttpError(426, 'update_required', '지원하지 않는 저장 형식입니다. 공장을 보존했습니다. 서버와 게임을 업데이트하세요.');
   }
-  if (opened.replayed) return opened;
+  if (opened.replayed) return { ...opened, offlineEarned: 0, offlineSeconds: 0 };
   if (body.revision !== null && body.revision !== opened.revision) {
     throw new HttpError(409, 'revision_conflict', '다른 기기에서 공장이 변경되었습니다. 최신 서버 상태를 불러왔습니다.', opened);
   }
@@ -84,14 +87,14 @@ export async function processSync(input, userId, repository, now = Date.now()) {
   // Never rewind that server timestamp or later syncs would award the time twice.
   const savedAt = opened.state?.savedAt;
   const simulationTime = Math.max(now, Number.isFinite(savedAt) ? savedAt : now);
-  const { game, offlineEarned, offlineSeconds, monthly } = hydrateMonthlyFactory(opened.state, simulationTime);
+  const { game, monthly } = hydrateMonthlyFactory(opened.state, simulationTime, body.activeSeconds ?? 0);
   const results = body.actions.map((action) => applyAction(game, action));
   const state = serializeFactory(game, simulationTime);
   if (!Number.isFinite(state.lifetimeRevenue) || state.lifetimeRevenue < 0) throw new HttpError(500, 'simulation_error', '공장 생산 상태를 계산할 수 없습니다.');
   return databaseError(await repository.commit({
     userId, expectedRevision: opened.revision, requestId: body.requestId, hash,
     state, score: Math.floor(state.lifetimeRevenue), nickname: body.nickname ?? opened.nickname,
-    results, offlineEarned: offlineEarned ?? 0, offlineSeconds: offlineSeconds ?? 0, monthly,
+    results, offlineEarned: 0, offlineSeconds: 0, monthly,
   }));
 }
 

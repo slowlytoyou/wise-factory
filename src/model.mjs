@@ -129,7 +129,7 @@ function autoPurchase(game) {
 
 /**
  * Advance simulation time, splitting at automation boundaries so frame rate
- * cannot change earnings. A single delta is limited to the offline cap.
+ * cannot change earnings. Bound each explicit simulation step for safety.
  */
 export function tick(game, dtSeconds) {
   const delta = boundedNumber(dtSeconds, 0, MAX_OFFLINE_SECONDS);
@@ -231,16 +231,8 @@ export function hydrateGame(raw, now = Date.now()) {
   if (Array.isArray(raw.achievements)) {
     game.achievements = [...new Set(raw.achievements.filter(name => ACHIEVEMENT_NAMES.has(name)))];
   }
-  const savedAt = boundedNumber(raw.savedAt, currentTime, 8.64e15);
-  const offlineSeconds = Math.min(MAX_OFFLINE_SECONDS, Math.max(0, (currentTime - savedAt) / 1000));
-  // Offline rewards use the saved production rate and never spend player funds.
-  const autoBuy = game.autoBuy;
-  const autoElapsed = game.autoElapsed;
-  game.autoBuy = false;
-  const { earned: offlineEarned } = tick(game, offlineSeconds);
-  game.autoBuy = autoBuy;
-  game.autoElapsed = autoElapsed;
+  // Resume the saved economy and timers; time spent away does not produce goods.
   game.savedAt = currentTime;
   unlockAchievements(game);
-  return { game, offlineEarned, offlineSeconds };
+  return { game, offlineEarned: 0, offlineSeconds: 0 };
 }

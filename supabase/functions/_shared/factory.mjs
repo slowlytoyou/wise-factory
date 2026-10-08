@@ -464,7 +464,8 @@ export function serializeFactory(game, now = Date.now()) {
   };
 }
 
-export function hydrateFactory(raw, now = Date.now(), { offline = true } = {}) {
+/** Restore saved production exactly; elapsed wall time never grants production. */
+export function hydrateFactory(raw, now = Date.now()) {
   now = safe(now);
   if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = null; } }
   if (!isObject(raw) || ![2, 3].includes(raw.version)) return { game: createFactory(now), offlineEarned: 0, offlineSeconds: 0 };
@@ -521,10 +522,7 @@ export function hydrateFactory(raw, now = Date.now(), { offline = true } = {}) {
   }
   game.lifetimeRevenue = Math.max(game.lifetimeRevenue, progression.runRevenue);
   game.soldCount = Math.max(game.soldCount, Object.values(game.stats.sold).reduce((sum, count) => sum + count, 0));
-  const offlineSeconds = offline && typeof raw.savedAt === 'number' && Number.isFinite(raw.savedAt)
-    ? Math.min(MAX_OFFLINE_SECONDS, Math.max(0, (now - raw.savedAt) / 1000)) : 0;
-  const offlineEarned = advanceFactory(game, offlineSeconds).earned;
-  return { game, offlineEarned, offlineSeconds };
+  return { game, offlineEarned: 0, offlineSeconds: 0 };
 }
 
 export function factoryStats(game) {

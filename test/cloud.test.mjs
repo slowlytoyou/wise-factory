@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CloudClient, CloudError, readCloudConfig } from '../src/cloud.mjs';
 import { createHandler, processSync, requestDigest, validateRequest, verifyUser, SupabaseRepository } from '../supabase/functions/factory-sync/server.mjs';
-import { BUILDINGS, MAX_OFFLINE_SECONDS, SHOP_ITEMS } from '../src/factory.mjs';
+import { BUILDINGS, SHOP_ITEMS } from '../src/factory.mjs';
 
 const CONFIG = { url: 'https://factory-test.supabase.co', key: 'sb_publishable_test' };
 const USER = '06a56578-6ad7-4a20-bbb2-bae4c487a0ae';
@@ -20,20 +20,41 @@ async function fixture(t, fetchImpl) {
   return new CloudClient(CONFIG, { fetchImpl, sessionFile: join(dir, 'session.json'), callbackPort: 0, callbackTimeoutMs: 3000 });
 }
 
-test('cloud configuration is optional, environment overrides JSON and secrets are rejected', async (t) => {
+test('cloud config pairs stay together, environment overrides JSON and secrets are rejected', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'starfall-config-test-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configFile = join(dir, 'cloud.json');
-  assert.equal(readCloudConfig({ env: {}, configFile }), null);
+  assert.equal(readCloudConfig({ env: {}, configFile, defaultConfigFile: null }), null);
   assert.throws(() => readCloudConfig({ env: { SUPABASE_URL: CONFIG.url }, configFile }), /함께/);
   await writeFile(configFile, JSON.stringify({ url: CONFIG.url, publishableKey: CONFIG.key }));
   assert.equal(readCloudConfig({ env: {}, configFile }).url, CONFIG.url);
-  assert.equal(readCloudConfig({ env: { SUPABASE_URL: 'https://other.supabase.co' }, configFile }).url, 'https://other.supabase.co');
+  assert.throws(() => readCloudConfig({ env: { SUPABASE_URL: 'https://other.supabase.co' }, configFile }), /함께/);
+  assert.equal(readCloudConfig({ env: { SUPABASE_URL: 'https://other.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_other' }, configFile }).url, 'https://other.supabase.co');
   assert.throws(() => new CloudClient({ ...CONFIG, key: 'sb_secret_never-on-client' }), /관리자/);
   const service = `e30.${Buffer.from(JSON.stringify({ role: 'service_role' })).toString('base64url')}.signature`;
   assert.throws(() => new CloudClient({ ...CONFIG, key: service }), /관리자/);
   assert.throws(() => new CloudClient({ ...CONFIG, url: 'http://example.com' }), /HTTPS/);
   assert.throws(() => new CloudClient({ ...CONFIG, url: 'https://user:secret@example.com' }), /HTTPS/);
+});
+
+test('fresh installations use the bundled public server without personal configuration', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'wise-shared-config-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const configFile = join(dir, 'absent.json');
+  const bundled = JSON.parse(await readFile(new URL('../config/cloud.default.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(bundled).sort(), ['port', 'publishableKey', 'url']);
+  assert.match(bundled.publishableKey, /^sb_publishable_[A-Za-z0-9_-]+$/);
+  const config = readCloudConfig({ env: {}, configFile });
+  assert.deepEqual(config, { url: bundled.url, key: bundled.publishableKey, port: bundled.port });
+  assert.equal(readCloudConfig({ env: { STARFALL_AUTH_PORT: '55000' }, configFile }).port, 55000);
+  await writeFile(configFile, JSON.stringify({ url: CONFIG.url, publishableKey: CONFIG.key, port: 55001 }));
+  assert.deepEqual(readCloudConfig({ env: {}, configFile }), { ...CONFIG, port: 55001 });
+  await writeFile(configFile, JSON.stringify({ url: CONFIG.url }));
+  assert.throws(() => readCloudConfig({ env: {}, configFile }), /함께/);
+  await writeFile(configFile, '{broken');
+  assert.throws(() => readCloudConfig({ env: {}, configFile }), /JSON/);
+  // Complete environment credentials have priority even over a broken local file.
+  assert.deepEqual(readCloudConfig({ env: { SUPABASE_URL: CONFIG.url, SUPABASE_PUBLISHABLE_KEY: CONFIG.key }, configFile }), { ...CONFIG, port: 53682 });
 });
 
 test('sessions are scoped, private, atomic and do not persist provider or email fields', async (t) => {
@@ -212,9 +233,9 @@ test('refresh is deduplicated and sync sends only actions, revision, nickname an
   await client.saveSession(token({ expires_at: 1 }));
   await Promise.all([client.refreshSession(), client.refreshSession()]);
   const requestId = randomUUID();
-  await client.sync({ revision: 2, actions: [{ type: 'rotate', x: 12, y: 14 }], nickname: '별빛', requestId, state: { coins: 999999 } });
+  await client.sync({ revision: 2, actions: [{ type: 'rotate', x: 12, y: 14 }], nickname: '별빛', activeSeconds: 12.5, requestId, state: { coins: 999999 } });
   assert.equal(calls.filter((call) => call.url.includes('grant_type=refresh_token')).length, 1);
-  assert.deepEqual(JSON.parse(calls.at(-1).options.body), { revision: 2, actions: [{ type: 'rotate', x: 12, y: 14 }], requestId, nickname: '별빛' });
+  assert.deepEqual(JSON.parse(calls.at(-1).options.body), { revision: 2, actions: [{ type: 'rotate', x: 12, y: 14 }], requestId, nickname: '별빛', activeSeconds: 12.5 });
 });
 
 test('401 refresh retries the same idempotent request and conflict preserves latest state', async (t) => {
@@ -466,12 +487,15 @@ test('replaying a shop receipt cannot charge again or duplicate transmitter inve
   assert.equal(repo.commits, 2);
 });
 
-test('server time advances production and caps offline accrual at eight hours', async () => {
+test('reopening a cloud factory after two days never grants offline rewards', async () => {
   const repo = new MemoryRepository();
-  await processSync(fresh(), USER, repo, 1_000_000);
+  const initial = await processSync(fresh(), USER, repo, 1_000_000);
   const loaded = await processSync(fresh(), USER, repo, 1_000_000 + 48 * 3600 * 1000);
-  assert.equal(loaded.offlineSeconds, MAX_OFFLINE_SECONDS);
-  assert.ok(loaded.offlineEarned > 0);
+  assert.equal(loaded.offlineSeconds, 0);
+  assert.equal(loaded.offlineEarned, 0);
+  assert.equal(loaded.state.coins, initial.state.coins);
+  assert.equal(loaded.state.elapsed, initial.state.elapsed);
+  assert.deepEqual(loaded.state.buildings, initial.state.buildings);
   assert.equal(loaded.state.savedAt, 1_000_000 + 48 * 3600 * 1000);
 });
 
@@ -499,8 +523,8 @@ test('a delayed sync cannot move the saved clock backwards and award production 
   assert.equal(repeated.state.elapsed, newer.state.elapsed);
   assert.equal(repeated.state.lifetimeRevenue, newer.state.lifetimeRevenue);
   assert.equal(repeated.state.coins, newer.state.coins);
-  const later = await processSync(fresh(), USER, repo, 31_000);
-  assert.equal(later.offlineSeconds, 10);
+  const later = await processSync(fresh({ revision: repeated.revision, activeSeconds: 10 }), USER, repo, 31_000);
+  assert.equal(later.offlineSeconds, 0);
   assert.equal(later.state.elapsed, newer.state.elapsed + 10);
 });
 

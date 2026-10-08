@@ -24,7 +24,7 @@ const HELP = `
   P 일시 정지 · ? 도움말 · Q 저장하고 종료
 
   최소 88열 × 32행, 권장 110열 × 38행, UTF-8 터미널.
-  10초마다 자동 저장 · 오프라인 생산 최대 8시간.
+  10초마다 자동 저장 · 게임 실행 중에만 생산합니다.
   저장 위치: ${defaultSavePath()}
 `;
 
@@ -79,8 +79,7 @@ function run(config) {
   const game = loaded.game;
   const ui = { time: 0, paused: false, demo: config.demo, effects: [], logs: [], help: false, confirmPrestige: false, saveError: loaded.warning ?? '' };
   const log = text => { ui.logs.unshift(text); ui.logs = ui.logs.slice(0, 8); };
-  if (loaded.offlineEarned > 0) log(`다시 오셨군요! ${Math.floor(loaded.offlineSeconds / 60)}분 동안 별가루 +${number(loaded.offlineEarned)} ✦`);
-  else log(config.demo ? '데모 모드 · 모든 설비 가동 중 · 저장 파일에 영향을 주지 않습니다.' : '공방 가동 시작 · [1]로 첫 채집 드론을 구매해 보세요.');
+  log(config.demo ? '데모 모드 · 모든 설비 가동 중 · 저장 파일에 영향을 주지 않습니다.' : '공방 가동 시작 · [1]로 첫 채집 드론을 구매해 보세요.');
   if (loaded.warning) log(loaded.warning);
 
   let previous = null;
@@ -139,7 +138,6 @@ function run(config) {
   function resume() {
     if (closed || !suspended) return;
     suspended = false;
-    if (!ui.paused) tick(game, Math.max(0, (performance.now() - lastTime) / 1000)).events.forEach(log);
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdout.write('\x1b[?1049h\x1b[2J\x1b[?25l\x1b[?7l');
@@ -187,7 +185,8 @@ function run(config) {
     if (closed || suspended) return;
     try {
       const now = performance.now();
-      const dt = Math.max(0, (now - lastTime) / 1000);
+      const elapsed = Math.max(0, (now - lastTime) / 1000);
+      const dt = elapsed <= 1 ? elapsed : 0;
       lastTime = now;
       if (!ui.paused) {
         ui.time += Math.min(dt, .25);

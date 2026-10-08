@@ -352,7 +352,7 @@ test('simulation is frame independent and cycle skipping matches full substep si
   assert.deepEqual(economicState(skipped), economicState(reference));
 });
 
-test('prestige bonuses and transmitter sales match frames, cycle skips, and offline recovery', () => {
+test('prestige bonuses and transmitter sales match frames and cycle skips after resuming', () => {
   const original = createFactory(1000, { demo: true });
   original.progression.cores = 3;
   original.progression.prestigeCount = 2;
@@ -366,10 +366,12 @@ test('prestige bonuses and transmitter sales match frames, cycle skips, and offl
   for (let i = 0; i < 300 * 24; i++) advanceFactory(frames, 1 / 24);
   assert.deepEqual(economicState(skipped), economicState(seconds));
   assert.deepEqual(economicState(skipped), economicState(frames));
-  const offline = hydrateFactory(serializeFactory(original, 1000), 1000 + MAX_OFFLINE_SECONDS * 1000);
+  const restored = hydrateFactory(serializeFactory(original, 1000), 1000 + MAX_OFFLINE_SECONDS * 1000);
+  assert.deepEqual(economicState(restored.game), economicState(original));
+  assert.equal(restored.offlineEarned, 0);
+  advanceFactory(restored.game, MAX_OFFLINE_SECONDS);
   advanceFactory(original, MAX_OFFLINE_SECONDS);
-  assert.deepEqual(economicState(offline.game), economicState(original));
-  assert.equal(offline.offlineEarned, original.progression.runRevenue);
+  assert.deepEqual(economicState(restored.game), economicState(original));
   assert.equal(original.lifetimeRevenue, 30_000 + original.progression.runRevenue);
 });
 
@@ -557,15 +559,17 @@ test('untrusted saves reject unknown buildings, invalid positions, duplicate til
   assert.ok(Number.isFinite(advanceFactory(game, 100).earned));
 });
 
-test('offline advancement is capped at8h, rejects backwards time, and can be disabled', () => {
-  const raw = serializeFactory(createFactory(1000, { demo: true }), 1000);
-  const capped = hydrateFactory(raw, 1000 + 48 * 3600 * 1000);
-  assert.equal(capped.offlineSeconds, MAX_OFFLINE_SECONDS);
-  assert.equal(capped.game.savedAt, 1000 + 48 * 3600 * 1000);
-  const reference = hydrateFactory(raw, 1000, { offline: false }).game;
-  assert.equal(capped.offlineEarned, advanceFactory(reference, MAX_OFFLINE_SECONDS).earned);
-  assert.deepEqual(economicState(capped.game), economicState(reference));
-  assert.equal(hydrateFactory(raw, 0).offlineEarned, 0);
-  assert.equal(hydrateFactory(raw, 1000 + 1e9, { offline: false }).offlineSeconds, 0);
-  assert.equal(hydrateFactory(serializeFactory(capped.game, capped.game.savedAt), capped.game.savedAt).offlineEarned, 0);
+test('loading never advances inventory, production progress, timers or revenue', () => {
+  const game = createFactory(1000, { demo: true });
+  advanceFactory(game, 37.4);
+  const raw = serializeFactory(game, 1000);
+  for (const resumedAt of [0, 1000, 1000 + 30 * 24 * 3600 * 1000]) {
+    // Legacy callers cannot opt back into rewarding wall time.
+    const restored = hydrateFactory(raw, resumedAt, { offline: true });
+    assert.equal(restored.offlineSeconds, 0);
+    assert.equal(restored.offlineEarned, 0);
+    assert.equal(restored.game.savedAt, resumedAt);
+    assert.deepEqual(serializeFactory(restored.game, 0), serializeFactory(game, 0));
+    assert.ok(advanceFactory(restored.game, 60).earned > 0);
+  }
 });

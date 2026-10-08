@@ -239,7 +239,7 @@ test('help is an opaque modal with construction, factory, cloud-pause, and exit 
   const b = renderFactory(game, ui({ time: 1.4, help: true, cloud: { status: 'online' } }), 88, 30);
   const modal = rectangle(a, 4, 3, 80, 24);
   assert.equal(modal, rectangle(b, 4, 3, 80, 24));
-  for (const fragment of ['FIELD MANUAL', 'WASD', 'E / SPACE', 'R ', 'U / X', 'F ', 'C / L', 'B ', 'T ', '3 / 4 / 5', 'P / Q', '서버의 생산 시간', '[ESC / ?]']) assert.ok(modal.includes(fragment), fragment);
+  for (const fragment of ['FIELD MANUAL', 'WASD', 'E / SPACE', 'R ', 'U / X', 'F ', 'C / L', 'B ', 'T ', '3 / 4 / 5', 'P / Q', '실행·연결 중에만 생산', 'P는 화면만 정지', '[ESC / ?]']) assert.ok(modal.includes(fragment), fragment);
   assert.match(modal, /벨트는 뒤·옆 입력 · 가공 설비는 모든 방향 입력/);
 });
 

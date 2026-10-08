@@ -52,10 +52,10 @@ const HELP = `
   T에서 환생 보상·초기화 범위 확인 → E/Enter → Y로 최종 확정합니다.
   OH 코어는 보유만 해도 1개당 모든 판매가 +25%, 소모되지 않습니다.
   권장 120열 × 40행, 최소 88열 × 30행. 좁은 창에서는 맵이 스크롤됩니다.
-  로컬 10초 자동 저장 · 오프라인 생산 최대 8시간.
+  로컬 10초 자동 저장 · 게임 실행 중에만 생산합니다.
   개인 플레이에서도 채굴·상점·레이더·전송기·환생을 모두 이용할 수 있습니다.
   로그인해도 npm start는 개인 로컬 저장을 사용합니다.
-  클라우드 모드에서는 화면을 정지해도 서버의 공장은 생산을 계속합니다.
+  클라우드 모드에서는 접속 중 화면만 정지해도 생산을 계속합니다.
   저장 위치: __FACTORY_SAVE_PATH__
   Supabase 설정 안내: docs/CLOUD_SETUP.md
 `;
@@ -133,7 +133,7 @@ async function run(config) {
     const ranks = await client.leaderboard();
     say(`WISE FACTORY · 월간 판매 리더보드${/^\d{4}-\d{2}$/.test(ranks.month ?? '') ? ` · ${ranks.month}` : ''}\n`);
     say('매월 1일 00:00 (한국 시간) 점수 초기화 · 공장과 OH 코어는 유지\n');
-    say('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 (최대 8시간 오프라인 생산 포함)\n');
+    say('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 · 접속하여 실행 중에만 생산\n');
     for (const entry of ranks.entries ?? []) {
       process.stdout.write(`${String(entry.rank).padStart(3)}  ${fitText(entry.nickname, 24)}  `);
       say(`${Math.floor(Number.isFinite(entry.score) ? Math.max(0, entry.score) : 0).toLocaleString('en-US')} C  · ${formatGoldRate(entry.goldPerSecond)} 골드/초\n`);
@@ -160,7 +160,7 @@ async function run(config) {
     await cloud.connect();
   }
   const store = new FactoryStore(cloud ? join(dirname(defaultFactoryPath()), 'factory-cloud-cache.json') : config.file);
-  const loaded = config.demo ? { game: createFactory(Date.now(), { demo: true }), offlineEarned: 0 } : cloud ? { game: cloud.game, offlineEarned: 0 } : store.load();
+  const loaded = config.demo ? { game: createFactory(Date.now(), { demo: true }) } : cloud ? { game: cloud.game } : store.load();
   let game = loaded.game;
   if (!cloud && config.nickname !== undefined) game.nickname = config.nickname;
   if (config.demo) advanceFactory(game, 35);
@@ -171,7 +171,6 @@ async function run(config) {
   const log = message => { ui.logs.unshift(message); ui.logs = ui.logs.slice(0, 8); dirty = true; };
   if (cloud) cloud.onMessage = log;
   log(config.demo ? 'DEMO · 철·구리 생산 라인이 중앙 상인에게 공급합니다.' : cloud ? '클라우드 공장 · 서버 저장 연결됨 · 상인 옆 B 상점' : '개인 플레이 · 로그인 없이 자동 저장 · 상인 옆 B 상점 · L 내 기록');
-  if (loaded.offlineEarned > 0) log(`오프라인 판매 수익 +${Math.floor(loaded.offlineEarned).toLocaleString('en-US')} C`);
   if (loaded.warning) log(loaded.warning);
   let nextBoardRefresh = Infinity;
   let previous = null;
@@ -235,9 +234,9 @@ async function run(config) {
         if (cloud.retryDelayMs > 0) await new Promise(resolve => setTimeout(resolve, cloud.retryDelayMs));
         synced = await syncCloud();
         if (!synced.ok && !synced.deferred) break;
-        if (!cloud.needsSync && synced.ok) break;
+        if (!cloud.needsSync && cloud.activeSeconds === 0 && synced.ok) break;
       }
-      if (cloud.needsSync) synced = { ok: false };
+      if (cloud.needsSync || cloud.activeSeconds > 0) synced = { ok: false };
     }
     const saved = saveLocal();
     if (error) { warn('게임 종료: '); process.stderr.write(`${error.message}\n`); }
@@ -263,7 +262,6 @@ async function run(config) {
   function resume() {
     if (closed || !suspended) return;
     suspended = false;
-    if (!ui.paused && !cloud) advanceFactory(game, Math.max(0, (performance.now() - lastTime) / 1000));
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdout.write('\x1b[?1049h\x1b[2J\x1b[?25l\x1b[?7l');
@@ -470,7 +468,7 @@ async function run(config) {
       if (ui.help || ui.leaderboard) return;
       if (name === 'p') {
         ui.paused = !ui.paused;
-        log(ui.paused ? cloud ? '화면 정지 · 서버의 생산은 계속됩니다. [P] 재개' : '일시 정지 · [P]로 공장 재개' : '공장을 다시 표시합니다.');
+        log(ui.paused ? cloud ? '화면 정지 · 접속 중 생산은 계속됩니다. [P] 재개' : '일시 정지 · [P]로 공장 재개' : '공장을 다시 표시합니다.');
         if (cloud && !ui.paused) queueSync();
         return;
       }
@@ -515,9 +513,12 @@ async function run(config) {
     if (closed || suspended) return;
     try {
       const now = performance.now();
-      const dt = Math.max(0, (now - lastTime) / 1000);
+      const elapsed = Math.max(0, (now - lastTime) / 1000);
+      // A suspended process or sleeping computer does not earn production.
+      const dt = elapsed <= 1 ? elapsed : 0;
       lastTime = now;
-      if (!ui.paused) {
+      if (cloud) cloud.trackActiveTime(dt);
+      if (!ui.paused && (!cloud || cloud.status === 'online')) {
         ui.time += Math.min(dt, .25);
         const update = advanceFactory(game, dt);
         for (const event of update.events ?? []) {

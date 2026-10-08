@@ -7,7 +7,116 @@ const response = (game, revision) => ({ state: serializeFactory(game, 1000000), 
 // Existing simulation tests bypass scheduling; cooldown behavior has its own fake-clock tests below.
 const coordinator = (client, options = {}) => new CloudGame(client, { minSyncIntervalMs: 0, ...options });
 const build = { type: 'build', x: 17, y: 16, building: 'belt', dir: 1 };
-test('cloud only sends actions and discards optimistic scores in favor of server state', async () => {
+test('loads grant no active time and recorded frames wait for periodic sync without creating a request loop', async () => {
+  const server = createFactory(1000000), calls = [];
+  const cloud = coordinator({ sync: async request => {
+    calls.push(structuredClone(request));
+    return response(server, calls.length - 1);
+  } });
+  cloud.trackActiveTime(1);
+  await cloud.connect();
+  assert.equal(calls[0].activeSeconds, 0);
+  for (const seconds of [-1, 0, NaN, Infinity, '1', 1.01, 60, 8 * 3600]) cloud.trackActiveTime(seconds);
+  assert.equal(cloud.activeSeconds, 0, 'sleep intervals and malformed durations cannot accrue');
+  for (let i = 0; i < 160; i++) {
+    cloud.trackActiveTime(.5);
+    assert.equal(cloud.needsSync, false, 'each frame must not schedule another network request');
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(cloud.activeSeconds, 80);
+  for (let i = 0; i < 100; i++) cloud.trackActiveTime(1);
+  assert.equal(cloud.activeSeconds, 120, 'an unusually slow request cannot grow an unbounded time backlog');
+  await cloud.sync();
+  assert.equal(calls[1].activeSeconds, 120);
+  assert.equal(cloud.activeSeconds, 0);
+  assert.equal(cloud.needsSync, false);
+});
+
+test('successful in-flight frames remain predicted and are credited exactly once on the next request', async () => {
+  const server = createFactory(1000000), requests = [];
+  let release;
+  const cloud = coordinator({ sync: async request => {
+    if (request.revision === null) return response(server, 0);
+    requests.push(structuredClone(request));
+    if (requests.length === 1) await new Promise(resolve => { release = resolve; });
+    advanceFactory(server, request.activeSeconds);
+    return response(server, requests.length);
+  } });
+  await cloud.connect();
+  for (let i = 0; i < 5; i++) cloud.trackActiveTime(1);
+  const flight = cloud.sync();
+  for (let i = 0; i < 3; i++) cloud.trackActiveTime(1);
+  release();
+  await flight;
+  assert.equal(requests[0].activeSeconds, 5);
+  assert.equal(server.elapsed, 5);
+  assert.equal(cloud.activeSeconds, 3);
+  assert.equal(cloud.game.elapsed, 8);
+  assert.equal(cloud.needsSync, false);
+  await cloud.sync();
+  assert.equal(requests[1].activeSeconds, 3);
+  assert.equal(server.elapsed, 8);
+  assert.equal(cloud.game.elapsed, 8);
+});
+
+test('a long disconnected gap keeps the exact receipt retry and never accrues a recovery reward', async () => {
+  const server = createFactory(1000000), requests = [];
+  let now = 0, release;
+  const cloud = coordinator({ sync: async request => {
+    if (request.revision === null) return response(server, 0);
+    requests.push(structuredClone(request));
+    if (requests.length === 1) {
+      await new Promise(resolve => { release = resolve; });
+      advanceFactory(server, request.activeSeconds);
+      throw new Error('response lost');
+    }
+    return { ...response(server, 1), replayed: requests.length === 2 };
+  } }, { clock: () => now });
+  await cloud.connect();
+  for (let i = 0; i < 5; i++) cloud.trackActiveTime(1);
+  const flight = cloud.sync();
+  for (let i = 0; i < 3; i++) cloud.trackActiveTime(1);
+  release(); await flight;
+  assert.equal(cloud.activeSeconds, 0, 'unconfirmed in-flight frames are discarded on disconnection');
+  now += 8 * 3600 * 1000;
+  for (let i = 0; i < 100; i++) cloud.trackActiveTime(1);
+  assert.equal(cloud.activeSeconds, 0);
+  await cloud.sync();
+  assert.deepEqual(requests[1], requests[0]);
+  assert.equal(requests[2].activeSeconds, 0);
+  assert.equal(cloud.game.elapsed, 5);
+});
+
+test('rate limits, expired sessions and conflicts discard unsent active frames', async () => {
+  for (const status of [429, 401, 409]) {
+    const server = createFactory(1000000);
+    let now = 0, release;
+    const cloud = coordinator({ sync: async request => {
+      if (request.revision === null) return response(server, 0);
+      await new Promise(resolve => { release = resolve; });
+      throw Object.assign(new Error('sync rejected'), { status, payload: response(server, 2), retryAfterMs: 2000 });
+    } }, { clock: () => now });
+    await cloud.connect();
+    cloud.trackActiveTime(1);
+    const flight = cloud.sync();
+    cloud.trackActiveTime(.5);
+    release();
+    await flight;
+    assert.equal(cloud.activeSeconds, 0);
+    if (status === 409) {
+      assert.equal(cloud.pending, null);
+      assert.equal(cloud.game.elapsed, 0);
+      assert.equal(cloud.needsSync, false);
+    } else {
+      assert.equal(cloud.pending.activeSeconds, 1, 'the immutable request remains safe to retry');
+      now += 3600000;
+      cloud.trackActiveTime(1);
+      assert.equal(cloud.activeSeconds, 0);
+    }
+  }
+});
+
+test('cloud sends action requests and discards optimistic scores in favor of server state', async () => {
   const server = createFactory(1000000), calls = [];
   const client = { sync: async request => {
     calls.push(structuredClone(request));
@@ -76,26 +185,30 @@ test('an action queued during a request survives reconciliation exactly once', a
   assert.equal(cloud.game.buildings.filter(b => b.y === 16).length, 2);
 });
 
-test('replayed receipts immediately trigger fresh server-time catchup without repeating construction', async () => {
+test('replayed receipts refresh the server state without repeating construction or awarding offline time', async () => {
   const server = createFactory(1000000), requests = [];
   const cloud = coordinator({ sync: async request => {
     if (request.revision === null) return response(server, 0);
     requests.push(structuredClone(request));
     if (requests.length === 1) {
       applyAction(server, request.actions[0]);
+      advanceFactory(server, request.activeSeconds);
       throw new Error('committed but response lost');
     }
     if (requests.length === 2) return { ...response(server, 1), replayed: true };
-    advanceFactory(server, 3600);
+    advanceFactory(server, request.activeSeconds);
     return response(server, 2);
   } });
   await cloud.connect(); cloud.action(build);
+  for (let i = 0; i < 60; i++) cloud.trackActiveTime(1);
   assert.equal((await cloud.sync()).ok, false);
   assert.equal((await cloud.sync()).ok, true);
   assert.equal(requests.length, 3);
   assert.equal(requests[0].requestId, requests[1].requestId);
   assert.notEqual(requests[1].requestId, requests[2].requestId);
   assert.deepEqual(requests[2].actions, []);
+  assert.equal(requests[2].activeSeconds, 0);
+  assert.equal(cloud.game.elapsed, 60);
   assert.ok(cloud.game.lifetimeRevenue > 0);
   assert.equal(cloud.game.buildings.length, createFactory().buildings.length + 1);
 });
@@ -337,15 +450,17 @@ test('receipt replay schedules fresh catchup after spacing while retaining queue
     requests.push(structuredClone(request));
     if (requests.length === 1) {
       request.actions.forEach(action => applyAction(server, action));
+      advanceFactory(server, request.activeSeconds);
       throw new Error('response lost');
     }
     if (requests.length === 2) return { ...response(server, 1), replayed: true };
     request.actions.forEach(action => applyAction(server, action));
-    advanceFactory(server, 60);
+    advanceFactory(server, request.activeSeconds);
     return response(server, 2);
   } }, { clock: () => now });
   await cloud.connect();
   cloud.action(build);
+  for (let i = 0; i < 60; i++) cloud.trackActiveTime(1);
   now = 600;
   assert.equal((await cloud.sync()).ok, false);
   now = 1200;
@@ -409,7 +524,7 @@ test('nickname-only changes normalize, obey sync spacing and become visible only
   assert.equal(cloud.pendingNickname, 'Factory 공장');
   assert.deepEqual(requests[0].actions, []);
   assert.equal(requests[0].nickname, 'Factory 공장');
-  assert.deepEqual(Object.keys(requests[0]).sort(), ['actions', 'nickname', 'requestId', 'revision']);
+  assert.deepEqual(Object.keys(requests[0]).sort(), ['actions', 'activeSeconds', 'nickname', 'requestId', 'revision']);
   release();
   assert.equal((await flight).ok, true);
   assert.equal(cloud.nickname, 'Factory 공장');

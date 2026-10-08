@@ -15,6 +15,7 @@ import pty
 import re
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -37,7 +38,7 @@ def prepare(directory, mode):
 import { writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CloudClient, CloudError } from %s;
-import { createFactory, applyAction, serializeFactory } from %s;
+import { createFactory, advanceFactory, applyAction, serializeFactory } from %s;
 const directory = process.env.STARFALL_TEST_DIRECTORY;
 const mode = process.env.STARFALL_TEST_MODE;
 const server = createFactory(Date.now());
@@ -73,6 +74,7 @@ CloudClient.prototype.sync = async function (request) {
     await new Promise(resolve => setTimeout(resolve, 900));
   }
   if (request.revision !== revision) throw new Error('Fixture received an unexpected revision');
+  advanceFactory(server, request.activeSeconds ?? 0);
   const results = request.actions.map(action => applyAction(server, action));
   if (results.some(result => !result.ok)) throw new Error('Fixture rejected construction: ' + JSON.stringify(results));
   if (request.nickname !== undefined) nickname = request.nickname;
@@ -259,6 +261,54 @@ def check_network_failure(directory):
     print("PASS: failed cloud shutdown reports an unconfirmed save and never claims success")
 
 
+def check_paused_active_time(directory):
+    with Game(directory, "normal") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"p")
+        game.until(lambda: "접속 중 생산은 계속됩니다" in game.text())
+        game.pump(1.3)
+        requests = [entry for entry in game.requests() if entry["event"] == "request"]
+        assert len(requests) == 1, "Active frames triggered requests before the periodic sync"
+        assert requests[0]["request"]["activeSeconds"] == 0, "Loading the factory awarded active time"
+        game.send(b"q")
+        state = game.finish()
+        assert state["elapsed"] >= 1.2, "Cloud screen pause stopped recording live production time"
+        commits = [entry["request"] for entry in game.requests() if entry["event"] == "request" and entry["request"]["revision"] is not None]
+        assert abs(state["elapsed"] - sum(request["activeSeconds"] for request in commits)) < .001
+    print("PASS: cloud P pauses the display while live time accrues and flushes once on exit")
+
+
+def check_suspended_active_time(directory):
+    with Game(directory, "normal") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"\x1a")
+        game.until(lambda: b"\x1b[?1049l" in game.output)
+        game.pump(1.6)
+        os.kill(game.process.pid, signal.SIGCONT)
+        game.until(lambda: game.output.count(b"\x1b[?1049h") == 2)
+        game.pump(.15)
+        game.send(b"q")
+        state = game.finish()
+        assert state["elapsed"] < 1, "Terminal suspension was credited as active production"
+    print("PASS: terminal suspension and resume do not award elapsed wall time")
+
+
+def check_disconnected_active_time(directory):
+    with Game(directory, "network-failure") as game:
+        game.until(lambda: "WISE FACTORY" in game.text())
+        game.send(b"2e")
+        game.until(lambda: "fixture network unavailable" in game.text())
+        first = [entry["request"] for entry in game.requests() if entry["event"] == "request" and entry["request"]["revision"] is not None][0]
+        game.pump(1.6)
+        game.send(b"q")
+        game.finish(code=1)
+        requests = [entry["request"] for entry in game.requests() if entry["event"] == "request" and entry["request"]["revision"] is not None]
+        assert requests == [first, first], "Disconnected frames changed the immutable retry payload"
+        cache = json.loads((game.personal.parent / "factory-cloud-cache.json").read_text())
+        assert cache["elapsed"] <= first["activeSeconds"] + .1, "Disconnected production kept advancing in the display"
+    print("PASS: lost connections freeze production and never add disconnected time to a retry")
+
+
 def check_rate_limit_recovery(directory):
     with Game(directory, "rate-limit") as game:
         game.until(lambda: "WISE FACTORY" in game.text())
@@ -294,4 +344,7 @@ if __name__ == "__main__":
         check_monthly_leaderboard(root / "monthly-leaderboard")
         check_network_failure(root / "network-failure")
         check_rate_limit_recovery(root / "rate-limit")
+        check_paused_active_time(root / "paused-time")
+        check_suspended_active_time(root / "suspended-time")
+        check_disconnected_active_time(root / "disconnected-time")
     print("All cloud PTY checks passed.")

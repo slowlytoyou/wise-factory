@@ -7,9 +7,8 @@ import { createFactory, hydrateFactory, serializeFactory } from './factory.mjs';
 export const defaultFactoryPath = () => join(dirname(defaultSavePath()), 'factory-v2.json');
 
 export class FactoryStore {
-  constructor(file = defaultFactoryPath(), { offline = true } = {}) {
+  constructor(file = defaultFactoryPath()) {
     this.file = file;
-    this.offline = offline;
     this.blocked = false;
     this.lastError = '';
   }
@@ -24,7 +23,7 @@ export class FactoryStore {
           && (!raw.progression || typeof raw.progression !== 'object' || Array.isArray(raw.progression) || raw.progression.schema !== 1)) {
         throw new Error('지원하지 않는 성장 저장 형식입니다');
       }
-      return { ...hydrateFactory(raw, now, { offline: this.offline }), warning: '' };
+      return { ...hydrateFactory(raw, now), warning: '' };
     } catch (error) {
       if (error.code === 'ENOENT') return fresh('');
       this.blocked = true;

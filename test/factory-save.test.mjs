@@ -7,18 +7,21 @@ import { FactoryStore } from '../src/factory-save.mjs';
 import { createFactory, advanceFactory, serializeFactory } from '../src/factory.mjs';
 
 function path(t) { const d = mkdtempSync(join(tmpdir(), 'factory-save-')); t.after(() => rmSync(d, { recursive: true, force: true })); return join(d, 'factory.json'); }
-test('factory saving roundtrips a live conveyor and applies offline revenue once', t => {
+test('factory saving preserves live conveyors and currency throughout a long absence', t => {
   const file = path(t), now = 1000000, store = new FactoryStore(file);
   const game = createFactory(now);
   advanceFactory(game, 20);
   assert.equal(store.save(game, now).ok, true);
   assert.equal(statSync(file).mode & 0o777, 0o600);
-  const loaded = store.load(now + 3600000);
-  assert.ok(loaded.offlineEarned > 0);
-  assert.ok(loaded.game.lifetimeRevenue > game.lifetimeRevenue);
-  assert.equal(loaded.game.buildings.length, game.buildings.length);
-  store.save(loaded.game, now + 3600000);
-  assert.equal(store.load(now + 3600000).offlineEarned, 0);
+  const resumedAt = now + 30 * 24 * 3600 * 1000;
+  const loaded = store.load(resumedAt);
+  assert.equal(loaded.offlineEarned, 0);
+  assert.equal(loaded.offlineSeconds, 0);
+  assert.deepEqual(serializeFactory(loaded.game, now), serializeFactory(game, now));
+  assert.equal(loaded.game.savedAt, resumedAt);
+  store.save(loaded.game, resumedAt);
+  assert.deepEqual(serializeFactory(store.load(resumedAt + 3600000).game, now), serializeFactory(game, now));
+  assert.ok(advanceFactory(loaded.game, 20).earned > 0);
 });
 test('fresh factory does not touch storage until saved', t => {
   const file = path(t);

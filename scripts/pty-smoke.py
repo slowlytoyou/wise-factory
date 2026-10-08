@@ -402,7 +402,7 @@ def check_sigcont(directory):
 
 def check_suspend_resume(directory):
     save = directory / "suspend.json"
-    # One packet at the merchant makes production while suspended observable.
+    # A waiting packet makes any production credited while away observable.
     fixture = subprocess.run(
         [NODE, "--input-type=module", "-e", """
 import { createFactory, serializeFactory } from './src/factory.mjs';
@@ -434,10 +434,31 @@ process.stdout.write(JSON.stringify(serializeFactory(game)));
         assert termios.tcgetattr(game.slave) != game.original_termios
         game.finish()
     after = json.loads(save.read_text())
-    assert after["elapsed"] >= before["elapsed"] + 1.1
-    assert after["lifetimeRevenue"] >= 2, after
-    assert after["coins"] >= before["coins"]
-    print("PASS: Ctrl-Z restores the shell, resume restores play and credits suspended production")
+    assert 0 <= after["elapsed"] - before["elapsed"] < 0.75
+    assert after["lifetimeRevenue"] == before["lifetimeRevenue"]
+    assert after["coins"] == before["coins"]
+    assert after["buildings"] == before["buildings"]
+
+    # Reopening a month-old save must not mint goods or move waiting cargo.
+    after["savedAt"] = int(time.time() * 1000) - 30 * 24 * 3600 * 1000
+    save.write_text(json.dumps(after))
+    with Game(directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        game.finish()
+    reopened = json.loads(save.read_text())
+    assert 0 <= reopened["elapsed"] - after["elapsed"] < 0.75
+    for key in ["coins", "lifetimeRevenue", "soldCount", "buildings", "stats", "progression"]:
+        assert reopened[key] == after[key], f"Reopening granted production: {key}"
+
+    # Active play still processes the waiting delivery normally.
+    with Game(directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        game.pump(1.3)
+        game.finish()
+    running = json.loads(save.read_text())
+    assert running["elapsed"] >= reopened["elapsed"] + 1.1
+    assert running["lifetimeRevenue"] >= reopened["lifetimeRevenue"] + 2
+    print("PASS: suspend and month-old reload preserve production; active play resumes sales and restores the terminal")
 
 
 def check_corrupt_save(directory):
@@ -486,7 +507,7 @@ const record = what => { fs.appendFileSync(marker, what + '\\n'); throw new Erro
 globalThis.fetch = () => record('network');
 const readSync = fs.readFileSync;
 fs.readFileSync = function(path, ...args) {
-  if (String(path).endsWith('/config/cloud.json')) return record('cloud-config');
+  if (['/config/cloud.json', '/config/cloud.default.json'].some(file => String(path).endsWith(file))) return record('cloud-config');
   return readSync.call(this, path, ...args);
 };
 const readAsync = fsp.readFile;

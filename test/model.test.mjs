@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  UPGRADES, PRESTIGE_THRESHOLD, MAX_OFFLINE_SECONDS,
+  UPGRADES, PRESTIGE_THRESHOLD,
   createGame, tick, buyUpgrade, upgradeCost, productionRate, pulse,
   prestige, canPrestige, toggleAutomation, automationUnlocked,
   serializeGame, hydrateGame,
@@ -76,23 +76,25 @@ test('corrupt, unknown and malformed saves are safe to load', () => {
   assert.ok(Number.isFinite(tick(game, 1).earned));
 });
 
-test('offline income is capped at eight hours and never spends resources', () => {
+test('loading after a long absence preserves currency, automation and cooldowns', () => {
   const game = createGame(10_000);
   buyUpgrade(game, 0);
-  game.lifetimeDust = 1000;
+  tick(game, 1000);
   game.autoBuy = true;
   game.autoElapsed = 3;
+  pulse(game);
   const raw = serializeGame(game, 10_000);
-  const restored = hydrateGame(JSON.stringify(raw), 10_000 + 2 * 24 * 60 * 60 * 1000);
-  assert.equal(restored.offlineSeconds, MAX_OFFLINE_SECONDS);
-  close(restored.offlineEarned, productionRate(game) * MAX_OFFLINE_SECONDS);
-  close(restored.game.dust, game.dust + restored.offlineEarned);
-  assert.deepEqual(restored.game.levels, game.levels);
-  assert.equal(restored.game.autoBuy, true);
-  assert.equal(restored.game.autoElapsed, 3);
-  assert.equal(hydrateGame(raw, 0).offlineEarned, 0);
-  const nextSave = serializeGame(restored.game, 99_999);
-  assert.equal(hydrateGame(nextSave, 99_999).offlineEarned, 0);
+  for (const resumedAt of [0, 10_000, 10_000 + 30 * 24 * 60 * 60 * 1000]) {
+    const restored = hydrateGame(JSON.stringify(raw), resumedAt);
+    assert.equal(restored.offlineSeconds, 0);
+    assert.equal(restored.offlineEarned, 0);
+    assert.deepEqual(serializeGame(restored.game, 0), serializeGame(game, 0));
+    assert.equal(restored.game.savedAt, resumedAt);
+    const result = tick(restored.game, 1);
+    assert.ok(result.earned > 0);
+    assert.equal(restored.game.autoElapsed, 4);
+    assert.equal(restored.game.pulseCooldown, .5);
+  }
 });
 
 test('prestige requires run earnings and preserves permanent progress', () => {

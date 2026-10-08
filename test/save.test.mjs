@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdi
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { SaveStore, defaultSavePath } from '../src/save.mjs';
-import { createGame, buyUpgrade, tick, productionRate } from '../src/model.mjs';
+import { createGame, buyUpgrade, tick, serializeGame } from '../src/model.mjs';
 
 function temporaryDirectory(t) {
   const directory = mkdtempSync(join(tmpdir(), 'starfall-save-test-'));
@@ -39,7 +39,7 @@ test('loading a missing file starts fresh without creating files or folders', t 
   assert.equal(existsSync(join(directory, 'not-created')), false);
 });
 
-test('atomic save round trip awards offline income and restricts file permissions', t => {
+test('atomic save round trip preserves an idle economy and restricts file permissions', t => {
   const directory = temporaryDirectory(t);
   const file = join(directory, 'nested', 'save.json');
   const store = new SaveStore(file);
@@ -49,16 +49,18 @@ test('atomic save round trip awards offline income and restricts file permission
   assert.equal(store.save(game, 21_000).ok, true);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(readdirSync(join(directory, 'nested')), ['save.json']);
-  const loaded = new SaveStore(file).load(81_000);
+  const resumedAt = 21_000 + 30 * 24 * 3600 * 1000;
+  const loaded = new SaveStore(file).load(resumedAt);
   assert.equal(loaded.warning, null);
-  assert.equal(loaded.offlineSeconds, 60);
-  assert.equal(loaded.offlineEarned, productionRate(game) * 60);
-  assert.equal(loaded.game.dust, game.dust + loaded.offlineEarned);
-  assert.deepEqual(loaded.game.levels, game.levels);
+  assert.equal(loaded.offlineSeconds, 0);
+  assert.equal(loaded.offlineEarned, 0);
+  assert.deepEqual(serializeGame(loaded.game, 0), serializeGame(game, 0));
+  assert.equal(loaded.game.savedAt, resumedAt);
   const bytes = readFileSync(file, 'utf8');
-  assert.equal(store.save(loaded.game, 81_000).ok, true);
+  assert.equal(store.save(loaded.game, resumedAt).ok, true);
   assert.notEqual(readFileSync(file, 'utf8'), bytes);
   assert.deepEqual(readdirSync(join(directory, 'nested')), ['save.json']);
+  assert.ok(tick(loaded.game, 1).earned > 0);
 });
 
 test('corrupt JSON, unknown versions and nonobjects block saves and preserve original bytes', t => {
