@@ -7,6 +7,8 @@ import { renderFactory, catalogPageSize, formatGoldRate } from './factory-render
 import { FactoryStore, defaultFactoryPath } from './factory-save.mjs';
 import { fitText } from './terminal.mjs';
 import { normalizeNickname } from './nickname.mjs';
+import { SKINS, getSkin, skinText } from './skins.mjs';
+import { PreferencesStore, defaultPreferencesPath } from './preferences.mjs';
 
 const nicknameGraphemes = new Intl.Segmenter('ko', { granularity: 'grapheme' });
 
@@ -26,6 +28,7 @@ const HELP = `
   --save PATH         로컬 저장 파일 지정
   --fps 10..60        애니메이션 FPS (기본 24)
   --no-color          색상 없이 실행
+  --skin NAME         original / work / work-dev (이번 실행에만 적용)
   --login [provider]  브라우저에서 회원가입 / 로그인
   --logout            로컬 로그인 세션 삭제
   --local             개인 로컬 플레이 (기본값, 로그인 정보 읽지 않음)
@@ -37,7 +40,10 @@ const HELP = `
   WASD / 방향키 이동 · 1 채굴기 · 2 벨트 · 3 용광로 · 4 조립기 · 5 전송기
   E / SPACE 설치 · R 회전 · U 강화 · X 철거 · F 레시피 변경
   B 상인 상점 · T 환생 · C 제작법 · L 내 기록(클라우드는 순위) · P 정지 · ? 도움말 · Q 종료
-  N 닉네임 설정 · G 클라우드 모드에서만 재연결
+  N 닉네임 설정 · K 스킨 설정 · G 클라우드 모드에서만 재연결
+
+  Original Skin · Work Skin (기존 용어) · Work Skin (프로그래밍 용어)
+  K → W/S 또는 1/2/3 선택 → Enter 적용. 스킨은 이 기기에 저장됩니다.
 
   상인 구역이나 인접 칸에서 B → W/S 선택 → E/Enter 구매.
   용광로·조립기 설계도를 사고, 레이더로 구리·석탄·원목·석영·금을 발견하세요.
@@ -50,7 +56,7 @@ const HELP = `
   개인 플레이에서도 채굴·상점·레이더·전송기·환생을 모두 이용할 수 있습니다.
   로그인해도 npm start는 개인 로컬 저장을 사용합니다.
   클라우드 모드에서는 화면을 정지해도 서버의 공장은 생산을 계속합니다.
-  저장 위치: ${defaultFactoryPath()}
+  저장 위치: __FACTORY_SAVE_PATH__
   Supabase 설정 안내: docs/CLOUD_SETUP.md
 `;
 
@@ -67,14 +73,21 @@ function options(args) {
     } else if (arg === '--fps') {
       result.fps = Number(args[++i]);
       if (!Number.isInteger(result.fps) || result.fps < 10 || result.fps > 60) throw new Error('--fps는 10–60 사이 정수여야 합니다.');
-    } else if (arg === '--save' || arg === '--nickname') {
+    } else if (arg === '--save' || arg === '--nickname' || arg === '--skin') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`${arg} 뒤에 값이 필요합니다.`);
       if (arg === '--save') { result.file = resolve(value); result.customFile = true; }
+      else if (arg === '--skin') {
+        if (!SKINS.some(skin => skin.id === value)) throw new Error('--skin은 original, work 또는 work-dev를 선택하세요.');
+        result.skin = value;
+      }
       else result.nickname = normalizeNickname(value);
     } else throw new Error(`알 수 없는 옵션: ${arg}`);
   }
   if (result.demo && result.cloud) throw new Error('--demo와 --cloud는 함께 사용할 수 없습니다.');
+  if (result.customFile && result.file === resolve(defaultPreferencesPath())) {
+    throw new Error('--save에는 스킨 설정 경로를 사용할 수 없습니다. 다른 저장 경로를 지정하세요.');
+  }
   if (result.cloud && result.customFile) throw new Error('--save는 개인 로컬 저장에만 사용합니다. 클라우드 공장은 npm run cloud로 실행하세요.');
   if (result.local && (result.cloud || result.login || result.logout || result.leaderboard)) {
     throw new Error('--local은 클라우드 명령과 함께 사용할 수 없습니다. 개인 플레이는 npm start로 실행하세요.');
@@ -96,45 +109,53 @@ async function cloudClient() {
 }
 
 async function run(config) {
-  if (config.help) { process.stdout.write(HELP); return; }
+  const say = text => process.stdout.write(skinText(text, config.skin));
+  const warn = text => process.stderr.write(skinText(text, config.skin));
+  if (config.help) { process.stdout.write(skinText(HELP, config.skin).replace('__FACTORY_SAVE_PATH__', defaultFactoryPath())); return; }
   if (config.snapshot) {
     const game = createFactory(1_700_000_000_000, { demo: config.demo });
     if (config.nickname !== undefined) game.nickname = config.nickname;
     if (config.demo) advanceFactory(game, 35);
-    const ui = { time: 2.6, demo: config.demo, selected: 'belt', direction: 1, recipe: 'iron_plate', logs: [], effects: [], cloud: { status: 'local' } };
+    const ui = { time: 2.6, demo: config.demo, skin: getSkin(config.skin).id, selected: 'belt', direction: 1, recipe: 'iron_plate', logs: [], effects: [], cloud: { status: 'local' } };
     process.stdout.write(renderFactory(game, ui, 120, 40).plain() + '\n');
     return;
   }
   if (config.login || config.logout || config.leaderboard) {
     const client = await cloudClient();
-    if (config.logout) { await client.logout(); process.stdout.write('로그아웃했습니다. 클라우드 공장은 보존됩니다.\n'); return; }
+    if (config.logout) { await client.logout(); say('로그아웃했습니다. 클라우드 공장은 보존됩니다.\n'); return; }
     if (config.login) {
-      process.stdout.write('선택한 클라우드 로그인 공급자의 지원 여부를 확인하고 있습니다…\n');
+      say('선택한 클라우드 로그인 공급자의 지원 여부를 확인하고 있습니다…\n');
       await client.login(config.login);
-      process.stdout.write('로그인 완료! npm run cloud로 공장을 시작하세요.\n');
+      say('로그인 완료! npm run cloud로 공장을 시작하세요.\n');
       return;
     }
     if (!client.hasSession()) throw new Error('먼저 npm run login으로 로그인해 주세요.');
     const ranks = await client.leaderboard();
-    process.stdout.write(`WISE FACTORY · 월간 판매 리더보드${/^\d{4}-\d{2}$/.test(ranks.month ?? '') ? ` · ${ranks.month}` : ''}\n`);
-    process.stdout.write('매월 1일 00:00 (한국 시간) 점수 초기화 · 공장과 OH 코어는 유지\n');
-    process.stdout.write('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 (최대 8시간 오프라인 생산 포함)\n');
-    for (const entry of ranks.entries ?? []) process.stdout.write(`${String(entry.rank).padStart(3)}  ${fitText(entry.nickname, 24)}  ${Math.floor(Number.isFinite(entry.score) ? Math.max(0, entry.score) : 0).toLocaleString('en-US')} C  · ${formatGoldRate(entry.goldPerSecond)} 골드/초\n`);
-    if (!ranks.entries?.length) process.stdout.write('아직 등록된 공장이 없습니다.\n');
-    if (ranks.me) process.stdout.write(`내 순위: ${ranks.me.rank}위 · ${Number.isFinite(ranks.me.score) ? Math.max(0, ranks.me.score) : 0} C · ${formatGoldRate(ranks.me.goldPerSecond)} 골드/초\n`);
+    say(`WISE FACTORY · 월간 판매 리더보드${/^\d{4}-\d{2}$/.test(ranks.month ?? '') ? ` · ${ranks.month}` : ''}\n`);
+    say('매월 1일 00:00 (한국 시간) 점수 초기화 · 공장과 OH 코어는 유지\n');
+    say('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 (최대 8시간 오프라인 생산 포함)\n');
+    for (const entry of ranks.entries ?? []) {
+      process.stdout.write(`${String(entry.rank).padStart(3)}  ${fitText(entry.nickname, 24)}  `);
+      say(`${Math.floor(Number.isFinite(entry.score) ? Math.max(0, entry.score) : 0).toLocaleString('en-US')} C  · ${formatGoldRate(entry.goldPerSecond)} 골드/초\n`);
+    }
+    if (!ranks.entries?.length) say('아직 등록된 공장이 없습니다.\n');
+    if (ranks.me) say(`내 순위: ${ranks.me.rank}위 · ${Number.isFinite(ranks.me.score) ? Math.max(0, ranks.me.score) : 0} C · ${formatGoldRate(ranks.me.goldPerSecond)} 골드/초\n`);
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.TERM === 'dumb') {
-    process.stderr.write('WISE FACTORY는 대화형 터미널에서 실행해 주세요.\n화면 미리보기: npm run snapshot\n');
+    warn('WISE FACTORY는 대화형 터미널에서 실행해 주세요.\n화면 미리보기: npm run snapshot\n');
     process.exitCode = 1;
     return;
   }
+  const preferences = config.demo ? null : new PreferencesStore();
+  const preference = preferences?.load() ?? { skin: 'original', warning: '' };
+  config.skin = getSkin(config.skin ?? preference.skin).id;
   let cloud;
   if (config.cloud) {
     const { CloudGame } = await import('./cloud-game.mjs');
     const client = await cloudClient();
     if (!client.hasSession()) throw new Error('먼저 npm run login으로 로그인해 주세요.');
-    process.stdout.write('클라우드 공장을 불러오고 있습니다…\n');
+    say('클라우드 공장을 불러오고 있습니다…\n');
     cloud = new CloudGame(client, { nickname: config.nickname });
     await cloud.connect();
   }
@@ -145,6 +166,7 @@ async function run(config) {
   if (config.demo) advanceFactory(game, 35);
   const ui = { time: 0, paused: false, demo: config.demo, effects: [], logs: [], selected: 'belt', direction: 1, recipe: 'iron_plate', help: false, recipes: false, leaderboard: false, shop: false, shopIndex: 0, prestige: false, prestigeConfirm: false, leaders: [], myRank: null, cloud: { status: cloud?.status ?? 'local', nickname: cloud?.nickname ?? '', message: cloud?.message ?? '' }, saveError: loaded.warning ?? '' };
   Object.assign(ui, { nicknameEditor: false, nicknameDraft: '', nicknameError: '', nicknameSaving: false });
+  Object.assign(ui, { skin: config.skin, skinPicker: false, skinIndex: 0, skinError: preference.warning });
   let dirty = true;
   const log = message => { ui.logs.unshift(message); ui.logs = ui.logs.slice(0, 8); dirty = true; };
   if (cloud) cloud.onMessage = log;
@@ -205,7 +227,7 @@ async function run(config) {
     restore();
     let synced = { ok: true };
     if (cloud) {
-      process.stdout.write('클라우드에 마지막 작업을 확인하고 있습니다…\n');
+      say('클라우드에 마지막 작업을 확인하고 있습니다…\n');
       // Finish a request already in flight and its queued actions, respecting
       // normal spacing without holding terminal exit for a server rate limit.
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -218,10 +240,13 @@ async function run(config) {
       if (cloud.needsSync) synced = { ok: false };
     }
     const saved = saveLocal();
-    if (error) process.stderr.write(`게임 종료: ${error.message}\n`);
-    if (!saved.ok) process.stderr.write(`저장하지 못했습니다: ${saved.message}\n`);
-    if (!synced.ok) process.stderr.write('클라우드 저장을 확인하지 못했습니다. 다음 접속 시 마지막 서버 확인 상태로 이어집니다.\n');
-    else if (saved.ok) process.stdout.write(config.demo ? '✦ 공장 데모를 종료했습니다.\n' : cloud ? '✦ 클라우드 공장을 저장했습니다.\n' : `✦ 공장을 저장했습니다.\n${store.file}\n`);
+    if (error) { warn('게임 종료: '); process.stderr.write(`${error.message}\n`); }
+    if (!saved.ok) warn(`저장하지 못했습니다: ${saved.message}\n`);
+    if (!synced.ok) warn('클라우드 저장을 확인하지 못했습니다. 다음 접속 시 마지막 서버 확인 상태로 이어집니다.\n');
+    else if (saved.ok) {
+      say(config.demo ? '✦ 공장 데모를 종료했습니다.\n' : cloud ? '✦ 클라우드 공장을 저장했습니다.\n' : '✦ 공장을 저장했습니다.\n');
+      if (!config.demo && !cloud) process.stdout.write(`${store.file}\n`);
+    }
     process.exitCode = error || !saved.ok || !synced.ok ? 1 : code;
   }
   function resize() { previous = null; dirty = true; }
@@ -259,6 +284,27 @@ async function run(config) {
   function closePanels() {
     ui.help = ui.recipes = ui.leaderboard = ui.shop = ui.prestige = ui.prestigeConfirm = false;
     ui.nicknameEditor = false;
+    ui.skinPicker = false;
+    dirty = true;
+  }
+  function openSkins() {
+    closePanels();
+    ui.skinPicker = true;
+    ui.skinIndex = SKINS.findIndex(skin => skin.id === ui.skin);
+  }
+  function selectSkin(text, name) {
+    if (name === 'escape' || name === 'k') { closePanels(); return; }
+    if (name === 'w' || name === 'up') ui.skinIndex = (ui.skinIndex + SKINS.length - 1) % SKINS.length;
+    else if (name === 's' || name === 'down') ui.skinIndex = (ui.skinIndex + 1) % SKINS.length;
+    else if (/^[1-3]$/.test(text ?? '')) ui.skinIndex = Number(text) - 1;
+    else if (['e', 'return', 'enter'].includes(name)) {
+      ui.skin = config.skin = SKINS[ui.skinIndex].id;
+      previous = null;
+      const result = preferences?.save(ui.skin) ?? { ok: true };
+      ui.skinError = result.ok ? '' : result.message;
+      if (result.ok) { closePanels(); log(`스킨 적용 · ${getSkin(ui.skin).name}`); }
+      else log(result.message);
+    }
     dirty = true;
   }
   function openNickname() {
@@ -340,8 +386,10 @@ async function run(config) {
       if (key.ctrl && name === 'c') { void cleanup(); return; }
       if (key.ctrl && name === 'z') { suspend(); return; }
       if (ui.nicknameEditor) { editNickname(text, key, name); return; }
+      if (ui.skinPicker) { selectSkin(text, name); return; }
       if (name === 'q') { void cleanup(); return; }
       if (name === 'escape') { closePanels(); return; }
+      if (name === 'k') { openSkins(); return; }
       if (text === '?' || name === 'h') { const opening = !ui.help; closePanels(); ui.help = opening; return; }
       if (name === 'c') {
         const opening = !ui.recipes; closePanels(); ui.recipes = opening;
@@ -508,7 +556,7 @@ try { config = options(process.argv.slice(2)); await run(config); }
 catch (error) {
   process.stderr.write(`${error.message}\n`);
   if (config && (config.cloud || config.login || config.logout || config.leaderboard)) {
-    process.stderr.write('개인 로컬 플레이는 로그인 없이 이용할 수 있습니다: npm start\n개인 공장 저장은 클라우드 연결과 별도로 유지됩니다.\n');
+    process.stderr.write(skinText('개인 로컬 플레이는 로그인 없이 이용할 수 있습니다: npm start\n개인 공장 저장은 클라우드 연결과 별도로 유지됩니다.\n', config.skin));
   }
   process.stderr.write('도움말: node src/main.mjs --help\n');
   process.exitCode = 1;

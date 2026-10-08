@@ -17,7 +17,9 @@
     "snapshot": "node src/main.mjs --snapshot",
     "test": "node --test",
     "test:pty": "python3 scripts/pty-smoke.py",
-    "test:cloud-pty": "python3 scripts/cloud-pty-smoke.py"
+    "test:cloud-pty": "python3 scripts/cloud-pty-smoke.py",
+    "work": "node src/main.mjs --skin work",
+    "work:dev": "node src/main.mjs --skin work-dev"
   },
   "repository": {
     "type": "git",

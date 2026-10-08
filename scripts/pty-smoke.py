@@ -519,6 +519,83 @@ syncBuiltinESMExports();
     print("PASS: default/explicit private play, nickname, local records and save with cloud config/session/network access forbidden")
 
 
+def check_skins(directory):
+    skin_directory = directory / "skin-controls"
+    skin_directory.mkdir()
+    preferences = skin_directory / "state" / "starfall" / "preferences.json"
+    save = skin_directory / "factory.json"
+    progression_fixture(save, "game.buildings=[]; game.lifetimeRevenue=6000; game.progression.runRevenue=6000;")
+    before = json.loads(save.read_text())
+    with Game(skin_directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        marker = game.send(b"pk")
+        game.expect("APPEARANCE", marker)
+        game.expect("Original Skin", marker)
+        game.expect("Work Skin", marker)
+        game.send(b"s")
+        game.pump()
+        marker = game.send(b"e")
+        game.expect("스킨 적용", marker)
+        assert json.loads(preferences.read_text())["skin"] == "work"
+        marker = game.send(b"k3\r")
+        game.expect("WISE WORKSPACE", marker)
+        assert json.loads(preferences.read_text())["skin"] == "work-dev"
+        # Cosmetic changes are allowed while paused. Picker shortcuts must
+        # neither move/build nor accidentally confirm a prestige dialog.
+        game.send(b"k1")
+        game.pump()
+        game.send(b"k")
+        game.pump()
+        assert json.loads(preferences.read_text())["skin"] == "work-dev"
+        game.send(b"k2\x1b")
+        game.pump(0.6)
+        assert json.loads(preferences.read_text())["skin"] == "work-dev"
+        game.send(b"t")
+        game.pump()
+        game.send(b"k2e")
+        game.pump()
+        game.send(b"k3e")
+        game.pump()
+        game.send(b"2euwasdx")
+        game.pump()
+        game.finish()
+    after = json.loads(save.read_text())
+    for field in ["coins", "player", "buildings", "progression", "lifetimeRevenue", "soldCount"]:
+        assert after[field] == before[field], (field, before[field], after[field])
+    assert "skin" not in after and "preferences" not in after
+    assert preferences.stat().st_mode & 0o777 == 0o600
+
+    # The device preference survives restarts, but a command-line override is
+    # temporary. Demo switches must also leave the stored preference alone.
+    original_preferences = preferences.read_bytes()
+    for flags, title in [([], "WISE WORKSPACE"), (["--skin", "original"], "WISE FACTORY")]:
+        with Game(skin_directory, "--save", str(save), *flags) as game:
+            game.expect(title)
+            game.finish()
+        assert preferences.read_bytes() == original_preferences
+    with Game(skin_directory, "--demo", "--skin", "work") as game:
+        game.expect("WISE FACTORY")
+        game.send(b"k3e")
+        game.expect("WISE WORKSPACE")
+        game.finish()
+    assert preferences.read_bytes() == original_preferences
+
+    # A damaged preferences file is preserved; switching still works for this
+    # session and explains why it cannot be saved.
+    preferences.write_text("{ damaged preferences\n")
+    with Game(skin_directory, "--save", str(save)) as game:
+        game.expect("WISE FACTORY")
+        game.send(b"k")
+        game.expect("원본을 보존")
+        marker = game.send(b"2e")
+        game.expect("이번 실행", marker)
+        game.send(b"k")
+        game.pump()
+        game.finish()
+    assert preferences.read_text() == "{ damaged preferences\n"
+    print("PASS: three skins, paused switching, picker cancellation, safe prestige exit, restart, CLI/demo overrides and corrupt preferences preservation")
+
+
 if __name__ == "__main__":
     if NODE is None:
         raise SystemExit("Node.js 20+ must be on PATH")
@@ -538,4 +615,5 @@ if __name__ == "__main__":
         check_corrupt_save(directory)
         check_termination_signal(directory)
         check_private_local_mode(directory)
+        check_skins(directory)
     print("All PTY checks passed.")

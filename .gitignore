@@ -12,6 +12,7 @@ supabase/functions/.env*
 *.save.json
 save.json
 factory-v2.json
+preferences.json
 *.tmp-*
 *.log
 .codex/
