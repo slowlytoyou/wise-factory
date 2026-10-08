@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFactory, advanceFactory, applyAction, ITEMS, BUILDINGS, RECIPES, WORLD_WIDTH, WORLD_HEIGHT, upgradeCost, shopOffers } from '../src/factory.mjs';
-import { renderFactory, factoryViewport, formatNumber, catalogPageSize, formatGoldRate } from '../src/factory-render.mjs';
+import { renderFactory, factoryViewport, formatNumber, catalogPageSize, formatGoldRate, formatPlayTime } from '../src/factory-render.mjs';
 import { displayWidth } from '../src/terminal.mjs';
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -299,6 +299,14 @@ test('monthly leaderboard safely displays zero and missing rates without NaN or 
     assert.ok(!text.includes('검증한 누적 판매액'));
     assert.equal(formatGoldRate(rate), '0');
   }
+});
+
+test('playtime formatting retains total hours, floors partial seconds and safely handles invalid values', () => {
+  for (const value of [undefined, null, NaN, Infinity, -Infinity, -1, '3600', {}, []]) assert.equal(formatPlayTime(value), '0:00:00');
+  for (const [seconds, expected] of [[0, '0:00:00'], [59.99, '0:00:59'], [60, '0:01:00'], [3600, '1:00:00'], [90061, '25:01:01'], [444444443, '123456:47:23'], [Number.MAX_SAFE_INTEGER, '2501999792983:36:31']]) {
+    assert.equal(formatPlayTime(seconds), expected);
+  }
+  assert.equal(formatPlayTime(Number.MAX_VALUE), formatPlayTime(Number.MAX_SAFE_INTEGER));
 });
 
 test('local play and demo stay visibly distinct from every cloud connection status', () => {

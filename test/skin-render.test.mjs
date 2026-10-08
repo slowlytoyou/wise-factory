@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFactory, RECIPES } from '../src/factory.mjs';
-import { renderFactory, factoryViewport } from '../src/factory-render.mjs';
+import { renderFactory, factoryViewport, formatPlayTime } from '../src/factory-render.mjs';
 import { SKINS, skinText } from '../src/skins.mjs';
 import { displayWidth } from '../src/terminal.mjs';
 
@@ -107,6 +107,28 @@ test('nickname display, draft, rankings and nickname logs retain exact user text
   }
   const cloud = renderFactory(game, { skin: 'work-dev', cloud: { status: 'online', nickname: '철광석공장' } }).plain();
   assert.match(cloud.split('\n')[33], /철광석공장/);
+});
+
+test('all leaderboard skins show total playtime and own rank outside the top ten at minimum width', () => {
+  const game = freeze(createFactory(0));
+  const leaders = Array.from({ length: 10 }, (_, index) => ({ rank: index + 1, nickname: `채굴기${index}공장`.repeat(4), score: 12000 - index, goldPerSecond: 12.34, playSeconds: index === 9 ? Number.MAX_SAFE_INTEGER : 90061 + index }));
+  const myRank = { rank: 234, nickname: '채굴기공장개발자'.repeat(3), score: 456, goldPerSecond: 0.5, playSeconds: 444444443 };
+  for (const skin of SKINS) {
+    const text = renderFactory(game, freeze({ skin: skin.id, leaderboard: true, cloud: { status: 'online' }, leaders, myRank }), 88, 30).plain();
+    const rows = text.split('\n');
+    assert.match(text, new RegExp(`${skinText('총 플레이 시간', skin.id)} ${formatPlayTime(myRank.playSeconds)}`));
+    assert.ok(text.includes(skinText('월간 초기화·환생에도 유지', skin.id)));
+    assert.match(text, /#234/);
+    assert.ok(text.includes('채굴기공장'), 'own nickname remains untranslated');
+    leaders.forEach((entry, index) => {
+      const row = rows[10 + index];
+      assert.ok(row.includes(`채굴기${index}공장`), `row ${index} nickname remains visible`);
+      assert.ok(row.includes(formatPlayTime(entry.playSeconds)), `row ${index} complete playtime remains visible`);
+      assert.match(row, /12\.34/);
+      assert.match(row, /12\.0K/);
+    });
+    rows.forEach(row => assert.equal(displayWidth(row), 88));
+  }
 });
 
 test('error paths remain exact and translated labels fit before clipping', () => {

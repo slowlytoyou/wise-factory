@@ -509,24 +509,37 @@ function safeAmount(value) { return Number.isFinite(value) && value >= 0 ? value
 
 export function formatGoldRate(value) { return formatNumber(safeAmount(value)); }
 
+/** Whole active seconds; hours keep accumulating across days, months and runs. */
+export function formatPlayTime(value) {
+  const seconds = Math.floor(Math.min(safeAmount(value), Number.MAX_SAFE_INTEGER));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 function leaderboardModal(c, ui) {
   const entries = Array.isArray(ui.leaders) ? ui.leaders : [];
   const month = /^\d{4}-\d{2}$/.test(ui.leaderboardMonth ?? '') ? `${ui.leaderboardMonth} · ` : '';
   const box = modal(c, 'MERCHANT GUILD / 월간 교역 리더보드', `${month}서버가 검증한 이번 달 판매액 순위`, 26, 94);
   write(c, box.x, box.y + 4, '매월 1일 00:00 (한국 시간) 점수 초기화', C.gold, box.width, C.panel);
   write(c, box.x, box.y + 5, '초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간', C.dim, box.width, C.panel);
-  const scoreX = box.x + box.width - 28;
-  const rateX = box.x + box.width - 12;
-  write(c, box.x, box.y + 7, '순위   공장주', C.dim, box.width - 30, C.panel);
-  write(c, scoreX, box.y + 7, '월간 판매액', C.dim, 14, C.panel);
+  const timeWidth = Math.max(14, textWidth(c, '총 플레이 시간'), ...entries.slice(0, 10).map(entry => formatPlayTime(entry.playSeconds).length));
+  const timeX = box.x + box.width - timeWidth;
+  const rateX = timeX - 13;
+  const scoreX = rateX - 13;
+  const nameWidth = scoreX - box.x - 1;
+  write(c, box.x, box.y + 7, '순위   공장주', C.dim, nameWidth, C.panel);
+  write(c, scoreX, box.y + 7, '월간 판매액', C.dim, 12, C.panel);
   write(c, rateX, box.y + 7, '골드/초', C.dim, 12, C.panel);
+  write(c, timeX, box.y + 7, '총 플레이 시간', C.dim, timeWidth, C.panel);
   if (entries.length) {
     entries.slice(0, 10).forEach((entry, index) => {
       const rank = String(entry.rank ?? index + 1).padStart(2, ' ');
       const y = box.y + 8 + index;
-      mixedWrite(c, box.x, y, [rank + '   ', entry.nickname ? { raw: entry.nickname } : '이름 없는 공장'], index < 3 ? C.gold : C.text, box.width - 30, C.panel);
-      write(c, scoreX, y, `₵${formatNumber(safeAmount(entry.score))}`, C.mint, 14, C.panel);
+      mixedWrite(c, box.x, y, [rank + '   ', entry.nickname ? { raw: entry.nickname } : '이름 없는 공장'], index < 3 ? C.gold : C.text, nameWidth, C.panel);
+      write(c, scoreX, y, `₵${formatNumber(safeAmount(entry.score))}`, C.mint, 12, C.panel);
       write(c, rateX, y, formatGoldRate(entry.goldPerSecond), C.mint, 12, C.panel);
+      write(c, timeX, y, formatPlayTime(entry.playSeconds), C.mint, timeWidth, C.panel);
     });
   } else {
     write(c, box.x, box.y + 9, ui.leaderboardLoading || ui.cloud?.status === 'connecting' ? '리더보드를 불러오고 있습니다…' : ui.cloud?.status === 'online' ? '아직 순위 기록이 없습니다. 첫 판매를 시작하세요.' : '서버에 연결되면 공식 순위를 불러올 수 있습니다.', C.text, box.width, C.panel);
@@ -536,7 +549,9 @@ function leaderboardModal(c, ui) {
   if (me) mixedWrite(c, box.x, box.bottom - 4, typeof me === 'object'
     ? [`내 공장 #${me.rank}  `, { raw: fitText(me.nickname ?? '', 20) }, ` ₵${formatNumber(safeAmount(me.score))} · ${formatGoldRate(me.goldPerSecond)} 골드/초`]
     : [`내 공장 #${me}`], C.mint, box.width, C.panel);
+  if (me && typeof me === 'object') write(c, box.x, box.bottom - 3, `총 플레이 시간 ${formatPlayTime(me.playSeconds)}`, C.mint, box.width, C.panel);
   write(c, box.x, box.bottom - 2, '실행 중에만 생산 · 공장과 OH 코어는 유지', C.dim, box.width, C.panel);
+  write(c, box.x, box.bottom - 1, '총 플레이 시간: 월간 초기화·환생에도 유지', C.dim, box.width, C.panel);
   write(c, box.x, box.bottom, '[N] 닉네임 설정  [ESC / L] 돌아가기', C.gold, box.width, C.panel);
 }
 

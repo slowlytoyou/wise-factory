@@ -139,7 +139,7 @@ test('monthly RPC receives only trusted simulation buckets and clients cannot su
   await repository.commit({ monthly: [{ month: '2026-11-01', revenue: 5, seconds: 10 }] });
   assert.ok(sent.url.endsWith('/factory_commit_monthly'));
   assert.deepEqual(sent.body.p_monthly, [{ month: '2026-11-01', revenue: 5, seconds: 10 }]);
-  for (const field of ['monthly', 'score', 'goldPerSecond', 'season']) {
+  for (const field of ['monthly', 'score', 'goldPerSecond', 'playSeconds', 'play_seconds', 'season']) {
     assert.throws(() => validateRequest({ ...request(), [field]: 123 }), { status: 400 });
   }
 });

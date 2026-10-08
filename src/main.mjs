@@ -3,7 +3,7 @@ import { emitKeypressEvents } from 'node:readline';
 import { resolve, dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createFactory, advanceFactory, applyAction, buildingAt, RECIPES, shopOffers, prestigeInfo } from './factory.mjs';
-import { renderFactory, catalogPageSize, formatGoldRate } from './factory-render.mjs';
+import { renderFactory, catalogPageSize, formatGoldRate, formatPlayTime } from './factory-render.mjs';
 import { FactoryStore, defaultFactoryPath } from './factory-save.mjs';
 import { fitText } from './terminal.mjs';
 import { normalizeNickname } from './nickname.mjs';
@@ -134,12 +134,13 @@ async function run(config) {
     say(`WISE FACTORY · 월간 판매 리더보드${/^\d{4}-\d{2}$/.test(ranks.month ?? '') ? ` · ${ranks.month}` : ''}\n`);
     say('매월 1일 00:00 (한국 시간) 점수 초기화 · 공장과 OH 코어는 유지\n');
     say('초당 평균 골드 생산량 = 월간 판매액 ÷ 생산 반영 시간 · 접속하여 실행 중에만 생산\n');
+    say('총 플레이 시간 (시간:분:초) · 월간 초기화·환생에도 유지\n');
     for (const entry of ranks.entries ?? []) {
       process.stdout.write(`${String(entry.rank).padStart(3)}  ${fitText(entry.nickname, 24)}  `);
-      say(`${Math.floor(Number.isFinite(entry.score) ? Math.max(0, entry.score) : 0).toLocaleString('en-US')} C  · ${formatGoldRate(entry.goldPerSecond)} 골드/초\n`);
+      say(`${Math.floor(Number.isFinite(entry.score) ? Math.max(0, entry.score) : 0).toLocaleString('en-US')} C  · ${formatGoldRate(entry.goldPerSecond)} 골드/초 · ${formatPlayTime(entry.playSeconds)}\n`);
     }
     if (!ranks.entries?.length) say('아직 등록된 공장이 없습니다.\n');
-    if (ranks.me) say(`내 순위: ${ranks.me.rank}위 · ${Number.isFinite(ranks.me.score) ? Math.max(0, ranks.me.score) : 0} C · ${formatGoldRate(ranks.me.goldPerSecond)} 골드/초\n`);
+    if (ranks.me) say(`내 순위: ${ranks.me.rank}위 · ${Number.isFinite(ranks.me.score) ? Math.max(0, ranks.me.score) : 0} C · ${formatGoldRate(ranks.me.goldPerSecond)} 골드/초 · 총 플레이 시간 ${formatPlayTime(ranks.me.playSeconds)}\n`);
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.TERM === 'dumb') {
